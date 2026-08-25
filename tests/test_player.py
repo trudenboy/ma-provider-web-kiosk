@@ -3,24 +3,24 @@
 from __future__ import annotations
 
 import time
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 from music_assistant_models.enums import PlaybackState
+from music_assistant_models.player import PlayerMedia
 
 from music_assistant.providers.web_kiosk.player import WebKioskPlayer
 
 
-def _media(uri: str = "spotify://track/1") -> SimpleNamespace:
+def _media() -> Mock:
     """Return a minimal PlayerMedia stand-in."""
-    return SimpleNamespace(
-        uri=uri,
-        title="Track",
-        artist="Artist",
-        image_url=None,
-        stream_duration=120,
-        duration=120,
-    )
+    media = Mock(spec=PlayerMedia)
+    media.uri = "spotify://track/1"
+    media.title = "Track"
+    media.artist = "Artist"
+    media.image_url = None
+    media.stream_duration = 120
+    media.duration = 120
+    return media
 
 
 async def test_play_media_sets_playing_and_media(player: WebKioskPlayer) -> None:
@@ -35,10 +35,10 @@ async def test_play_media_sets_playing_and_media(player: WebKioskPlayer) -> None
 
 async def test_play_media_notifies_kiosk(player: WebKioskPlayer) -> None:
     """play_media pushes a 'play' broadcast through the HTTP server."""
-    player.provider.http_server = Mock()
+    player.provider.http_server = Mock()  # type: ignore[attr-defined]
     await player.play_media(_media())
 
-    player.provider.http_server.broadcast_play.assert_called_once()
+    player.provider.http_server.broadcast_play.assert_called_once()  # type: ignore[attr-defined]
 
 
 async def test_pause_snapshots_elapsed_time(player: WebKioskPlayer) -> None:
@@ -50,7 +50,8 @@ async def test_pause_snapshots_elapsed_time(player: WebKioskPlayer) -> None:
     await player.pause()
 
     assert player.playback_state == PlaybackState.PAUSED
-    assert player.elapsed_time >= 15.0
+    assert player._attr_elapsed_time is not None
+    assert player._attr_elapsed_time >= 15.0
 
 
 async def test_stop_clears_media_and_stream(player: WebKioskPlayer) -> None:
@@ -66,12 +67,14 @@ async def test_stop_clears_media_and_stream(player: WebKioskPlayer) -> None:
 async def test_seek_updates_elapsed(player: WebKioskPlayer) -> None:
     """seek() moves elapsed time and notifies the kiosk."""
     player._attr_playback_state = PlaybackState.PLAYING
-    player.provider.http_server = Mock()
+    player.provider.http_server = Mock()  # type: ignore[attr-defined]
 
     await player.seek(30)
 
     assert player.elapsed_time == 30.0
-    player.provider.http_server.broadcast_seek.assert_called_once_with("wk_test", 30)
+    player.provider.http_server.broadcast_seek.assert_called_once_with(  # type: ignore[attr-defined]
+        "wk_test", 30
+    )
 
 
 def test_update_position_ignored_while_paused(player: WebKioskPlayer) -> None:
