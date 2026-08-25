@@ -25,9 +25,9 @@ def test_bridge_client_id_rejects_non_kiosk_player(provider: WebKioskProvider) -
 def test_should_have_bridge_only_for_enabled_kiosk(player: WebKioskPlayer) -> None:
     """The bridge applies only when enabled and the player is a kiosk."""
     manager = WebKioskSendspinBridgeManager(player.provider)
-    player.provider.sendspin_bridge_enabled = True
+    player.provider.sendspin_bridge_enabled = True  # type: ignore[attr-defined]
 
     assert manager._should_have_bridge(player) is True
 
-    player.provider.sendspin_bridge_enabled = False
+    player.provider.sendspin_bridge_enabled = False  # type: ignore[attr-defined]
     assert manager._should_have_bridge(player) is False

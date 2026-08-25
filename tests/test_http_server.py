@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
+from unittest.mock import Mock
+
+from music_assistant_models.player import PlayerMedia
 
 from music_assistant.providers.web_kiosk.player import WebKioskPlayer
 from music_assistant.providers.web_kiosk.provider import WebKioskProvider
@@ -40,11 +42,11 @@ async def test_web_serves_spa(http_client: TestClient[Any, Any]) -> None:
 
 
 async def test_stream_requires_token(
-    http_client: TestClient[Any, Any], provider: WebKioskProvider
+    http_client: TestClient[Any, Any], provider: WebKioskProvider, mass_mock: Mock
 ) -> None:
     """GET /stream/{player_id} rejects a request without a valid token."""
     registered = WebKioskPlayer(provider, "wk_test", name="Test Kiosk")
-    provider.mass.players.get_player.return_value = registered
+    mass_mock.players.get_player.return_value = registered
 
     resp = await http_client.get("/stream/wk_test?token=wrong")
 
@@ -52,13 +54,14 @@ async def test_stream_requires_token(
 
 
 async def test_stream_redirects_to_ma_url(
-    http_client: TestClient[Any, Any], provider: WebKioskProvider
+    http_client: TestClient[Any, Any], provider: WebKioskProvider, mass_mock: Mock
 ) -> None:
     """GET /stream/{player_id} redirects to the MA streamserver URL."""
-    media = SimpleNamespace(uri="spotify://track/1")
+    media = Mock(spec=PlayerMedia)
+    media.uri = "spotify://track/1"
     registered = WebKioskPlayer(provider, "wk_test", name="Test Kiosk")
     registered._attr_current_media = media
-    provider.mass.players.get_player.return_value = registered
+    mass_mock.players.get_player.return_value = registered
     token = provider.get_stream_token("wk_test")
 
     resp = await http_client.get(f"/stream/wk_test?token={token}", allow_redirects=False)

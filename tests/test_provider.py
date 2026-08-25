@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 from music_assistant.providers.web_kiosk.provider import WebKioskProvider
 
@@ -26,13 +26,15 @@ def test_player_display_name_ip_based(provider: WebKioskProvider) -> None:
     assert provider.player_display_name("wk_192_168_10_15") == "Web Kiosk (192.168.10.15)"
 
 
-async def test_get_or_register_player_registers_once(provider: WebKioskProvider) -> None:
+async def test_get_or_register_player_registers_once(
+    provider: WebKioskProvider, mass_mock: Mock
+) -> None:
     """A new player id registers; a repeat call reuses the existing player."""
-    provider.mass.players.get_player.return_value = None
-    provider.mass.players.register = AsyncMock()
+    mass_mock.players.get_player.return_value = None
+    mass_mock.players.register = AsyncMock()
 
     player = await provider.get_or_register_player("wk_test")
 
     assert player is not None
     assert player.player_id == "wk_test"
-    provider.mass.players.register.assert_awaited_once()
+    mass_mock.players.register.assert_awaited_once()
