@@ -67,21 +67,6 @@ class PartyAdapter:
         self.cache = (now, info)
         return info
 
-    async def handle_status(self, _request: web.Request) -> web.Response:
-        """Return party status for the kiosk overlay."""
-        party = await self.get_active_party()
-        if party is None:
-            return web.json_response({"active": False})
-        return web.json_response(
-            {
-                "active": True,
-                "name": party.name,
-                "qr_text": party.qr_text,
-                "qr_url": "/api/party/qr.svg",
-                "qr_version": party.qr_version,
-            }
-        )
-
     async def handle_qr(self, request: web.Request) -> web.Response:
         """Serve the guest join URL as a QR code image."""
         party = await self.get_active_party()

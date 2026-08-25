@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from aiohttp import WSMsgType, web
-from music_assistant_models.media_items import Track
+from music_assistant_models.enums import PlaybackState
 
 from music_assistant.constants import SENDSPIN_SERVER_PORT
 
@@ -190,6 +190,16 @@ class WebKioskHTTPServer:
             if not ws.closed:
                 self.provider.mass.create_task(self._ws_send(ws, msg, player_id))
 
+    def broadcast_volume(self, player_id: str, volume_level: int) -> None:
+        """Notify subscribed WebSocket clients of a volume change."""
+        clients = self._ws_clients.get(player_id, set())
+        if not clients:
+            return
+        msg = json.dumps({"type": "volume", "level": volume_level})
+        for ws in list(clients):
+            if not ws.closed:
+                self.provider.mass.create_task(self._ws_send(ws, msg, player_id))
+
     def _setup_routes(self) -> None:
         """Register all HTTP routes."""
         self.app.router.add_get("/", self._handle_root)
@@ -199,8 +209,6 @@ class WebKioskHTTPServer:
         self.app.router.add_get("/ws", self._handle_ws)
         self.app.router.add_get("/stream/{player_id}", self._handle_stream)
         self.app.router.add_get("/stream/{player_id}.mp3", self._handle_stream)
-        self.app.router.add_get("/api/lyrics/{player_id}", self._handle_lyrics)
-        self.app.router.add_get("/api/party", self._handle_party_status)
         self.app.router.add_get("/api/party/qr.svg", self._handle_party_qr)
         self.app.router.add_get("/api/party/qr.png", self._handle_party_qr)
 
@@ -355,6 +363,8 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         endpoint so broadcast_stop reaches the correct client. Registers the
         player in MA on connect so the player appears when the kiosk starts.
         """
+        if self._reject_cross_site(request):
+            raise web.HTTPForbidden
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
 
@@ -372,6 +382,9 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         # Tell the kiosk its server-derived player_id so it can target MA
         # JSON-RPC playback commands before the first "play" push arrives.
         await self._ws_send(ws, json.dumps({"type": "welcome", "player_id": player_id}))
+        # A reconnecting/reloaded kiosk needs the current play state, otherwise it
+        # stays silent until the next playback command.
+        await self._send_snapshot(ws, player)
 
         try:
             async for msg in ws:
@@ -387,6 +400,33 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
             logger.debug("WebSocket client disconnected for player %s", player_id)
 
         return ws
+
+    async def _send_snapshot(
+        self, ws: web.WebSocketResponse, player: WebKioskPlayer | None
+    ) -> None:
+        """Push the current play state to a freshly connected kiosk."""
+        if player is None or player.current_media is None:
+            return
+        media = player.current_media
+        play_path = (
+            f"/stream/{player.player_id}?token={self.provider.get_stream_token(player.player_id)}"
+        )
+        payload: dict[str, Any] = {
+            "type": "play",
+            "path": play_path,
+            "player_id": player.player_id,
+            "title": media.title,
+            "artist": media.artist,
+            "image_url": media.image_url,
+            "duration": media.stream_duration or media.duration,
+        }
+        await self._ws_send(ws, json.dumps(payload))
+        if player.playback_state == PlaybackState.PAUSED:
+            await self._ws_send(ws, json.dumps({"type": "pause"}))
+        elif player.playback_state == PlaybackState.PLAYING and player.elapsed_time is not None:
+            await self._ws_send(
+                ws, json.dumps({"type": "seek", "position": int(player.elapsed_time)})
+            )
 
     async def _handle_stream(self, request: web.Request) -> web.StreamResponse:
         """Redirect the kiosk audio element to the MA Streamserver URL."""
@@ -407,44 +447,6 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         if not stream_url:
             return web.Response(status=502, text="Unable to resolve stream URL")
         raise web.HTTPFound(location=rewrite_stream_host(request, stream_url))
-
-    async def _handle_lyrics(self, request: web.Request) -> web.Response:
-        """Return lyrics for the currently playing track on a given player."""
-        player_id = request.match_info["player_id"]
-        empty = web.json_response({"lyrics": None, "lrc_lyrics": None})
-
-        player = self._get_kiosk_player(player_id)
-        if player is None:
-            return empty
-
-        media = player.current_media
-        if not media or not media.source_id or not media.queue_item_id:
-            return empty
-
-        queue_item = self.provider.mass.player_queues.get_item(media.source_id, media.queue_item_id)
-        if not queue_item or not queue_item.media_item:
-            return empty
-
-        track = queue_item.media_item
-        if not isinstance(track, Track):
-            return empty
-        try:
-            lyrics, lrc_lyrics = await self.provider.mass.metadata.get_track_lyrics(track)
-        except Exception:
-            lyrics, lrc_lyrics = None, None
-
-        return web.json_response(
-            {
-                "title": getattr(track, "name", ""),
-                "artist": getattr(track, "artist_str", ""),
-                "lyrics": lyrics,
-                "lrc_lyrics": lrc_lyrics,
-            }
-        )
-
-    async def _handle_party_status(self, request: web.Request) -> web.Response:
-        """Return party status for the kiosk overlay."""
-        return await self.party.handle_status(request)
 
     async def _handle_party_qr(self, request: web.Request) -> web.Response:
         """Serve the guest join URL as a QR code image (SVG or PNG by route)."""

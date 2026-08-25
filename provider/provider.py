@@ -21,12 +21,10 @@ from .constants import (
     CONF_ENABLE_SENDSPIN_BRIDGE,
     CONF_HTTP_PORT,
     CONF_KIOSK_URL,
-    CONF_OUTPUT_FORMAT,
     CONF_PLAYER_IDLE_TIMEOUT,
     CONF_SHOW_STOP_NOTIFICATION,
     DEFAULT_ENABLE_SENDSPIN_BRIDGE,
     DEFAULT_HTTP_PORT,
-    DEFAULT_OUTPUT_FORMAT,
     DEFAULT_PLAYER_IDLE_TIMEOUT,
     DEFAULT_SHOW_STOP_NOTIFICATION,
     WEB_KIOSK_PLAYER_ID_PREFIX,
@@ -67,12 +65,6 @@ class WebKioskProvider(PlayerProvider):
                 type=ConfigEntryType.INTEGER,
                 required=True,
                 default_value=str(DEFAULT_HTTP_PORT),
-            ),
-            ConfigEntry(
-                key=CONF_OUTPUT_FORMAT,
-                type=ConfigEntryType.STRING,
-                required=True,
-                default_value=DEFAULT_OUTPUT_FORMAT,
             ),
             ConfigEntry(
                 key=CONF_PLAYER_IDLE_TIMEOUT,
@@ -178,15 +170,11 @@ class WebKioskProvider(PlayerProvider):
                 existing.device_info.ip_address = ip_address
             self.on_player_activity(player_id)
             return existing
-        output_format = cast(
-            "str", self.config.get_value(CONF_OUTPUT_FORMAT, DEFAULT_OUTPUT_FORMAT)
-        )
         name = display_name or self.player_display_name(player_id)
         player = WebKioskPlayer(
             provider=self,
             player_id=player_id,
             name=name,
-            output_format=output_format,
             ip_address=ip_address,
         )
         await self.mass.players.register(player)
@@ -269,6 +257,11 @@ class WebKioskProvider(PlayerProvider):
         """Notify the kiosk WebSocket client to seek to position."""
         if self.http_server:
             self.http_server.broadcast_seek(player_id, position_seconds)
+
+    def notify_volume(self, player_id: str, volume_level: int) -> None:
+        """Notify the kiosk WebSocket client of a volume change."""
+        if self.http_server:
+            self.http_server.broadcast_volume(player_id, volume_level)
 
     def get_stream_token(self, player_id: str) -> str:
         """

@@ -48,7 +48,6 @@ Display toggles are URL parameters (`=0` disables):
 | Key | Default | Description |
 |-----|---------|-------------|
 | `http_port` | `8098` | Port for the embedded kiosk HTTP server |
-| `output_format` | `mp3` | Preferred HTML5 audio format (`mp3` / `aac` / `flac`) |
 | `player_idle_timeout` | `30` | Unregister idle kiosk players after this many minutes |
 | `show_stop_notification` | `false` | Ask for confirmation before closing playback |
 | `enable_sendspin_bridge` | `true` | Register kiosks as Sendspin clients for multiroom sync |

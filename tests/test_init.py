@@ -11,7 +11,6 @@ from music_assistant.providers.web_kiosk.constants import (
     CONF_ENABLE_SENDSPIN_BRIDGE,
     CONF_HTTP_PORT,
     CONF_KIOSK_URL,
-    CONF_OUTPUT_FORMAT,
     CONF_PLAYER_IDLE_TIMEOUT,
     CONF_SHOW_STOP_NOTIFICATION,
 )
@@ -35,7 +34,6 @@ async def test_get_config_entries_exposes_expected_keys(provider: WebKioskProvid
     keys = {entry.key for entry in entries}
     assert keys == {
         CONF_HTTP_PORT,
-        CONF_OUTPUT_FORMAT,
         CONF_PLAYER_IDLE_TIMEOUT,
         CONF_SHOW_STOP_NOTIFICATION,
         CONF_ENABLE_SENDSPIN_BRIDGE,

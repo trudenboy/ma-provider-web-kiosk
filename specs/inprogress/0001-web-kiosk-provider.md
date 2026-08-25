@@ -119,7 +119,6 @@ New provider config entries (all in `strings.json`):
 | key | type | default | notes |
 |-----|------|---------|-------|
 | `http_port` | INTEGER | `8098` | embedded HTTP server port (distinct from msx_bridge's 8099) |
-| `output_format` | STRING | `mp3` | `mp3` \| `aac` \| `flac` |
 | `player_idle_timeout` | INTEGER | `30` | minutes; unregister idle kiosk players |
 | `show_stop_notification` | BOOLEAN | `false` | include `showNotification` in WS `stop` |
 | `enable_sendspin_bridge` | BOOLEAN | `true` | register kiosk as external Sendspin client |
@@ -128,5 +127,11 @@ Player id scheme: `wk_<sanitized device_id or ip>` (prefix `WEB_KIOSK_PLAYER_ID_
 Sendspin bridge client id: `spb_wk_<player id sans prefix>`.
 
 WebSocket messages (MA → kiosk): `play`, `stop`, `pause`, `resume`, `seek`,
-`sendspin`. WebSocket messages (kiosk → MA): `position`, `pause`, `resume`,
-`seek`.
+`volume`, `sendspin`. WebSocket messages (kiosk → MA): `position`, `pause`,
+`resume`, `seek`.
+
+Lyrics and party status are read through MA's native JSON-RPC API
+(`metadata/get_track_lyrics`, `party/url`, `party/config`). The single
+provider-owned display endpoint is `/api/party/qr.svg`, which renders the join
+QR server-side because MA's native API exposes only the join URL, not a QR
+image.

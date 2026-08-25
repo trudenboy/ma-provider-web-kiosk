@@ -79,21 +79,10 @@ async def test_ws_welcome_carries_player_id(http_client: TestClient[Any, Any]) -
     await ws.close()
 
 
-async def test_party_status_inactive_without_party_provider(
+async def test_party_qr_404_without_party_provider(
     http_client: TestClient[Any, Any],
 ) -> None:
-    """GET /api/party reports inactive when the Party plugin is absent."""
-    resp = await http_client.get("/api/party")
+    """GET /api/party/qr.svg returns 404 when the Party plugin is absent."""
+    resp = await http_client.get("/api/party/qr.svg")
 
-    assert resp.status == 200
-    assert (await resp.json()) == {"active": False}
-
-
-async def test_lyrics_empty_for_unknown_player(http_client: TestClient[Any, Any]) -> None:
-    """GET /api/lyrics/{player_id} returns empty lyrics for an unknown player."""
-    resp = await http_client.get("/api/lyrics/wk_unknown")
-
-    assert resp.status == 200
-    body = await resp.json()
-    assert body["lyrics"] is None
-    assert body["lrc_lyrics"] is None
+    assert resp.status == 404

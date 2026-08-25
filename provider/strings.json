@@ -4,10 +4,6 @@
       "label": "HTTP Server Port",
       "description": "Port for the Web Kiosk HTTP server."
     },
-    "output_format": {
-      "label": "Audio Output Format",
-      "description": "Preferred audio format for HTML5 playback (mp3, aac, or flac)."
-    },
     "player_idle_timeout": {
       "label": "Player Idle Timeout (minutes)",
       "description": "Unregister kiosk players after this many minutes without activity."

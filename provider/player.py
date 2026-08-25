@@ -92,15 +92,9 @@ class WebKioskPlayer(Player):
             self.update_state()
 
     def on_ws_disconnected(self) -> None:
-        """
-        Mark player unavailable when last WebSocket client disconnects while playing.
-
-        If the player was playing when the kiosk dropped the WS connection,
-        mark it unavailable so MA reflects the actual state.
-        """
-        if self._attr_playback_state == PlaybackState.PLAYING:
-            self._attr_available = False
-            self.update_state()
+        """Mark the player unavailable when its last WebSocket client disconnects."""
+        self._attr_available = False
+        self.update_state()
 
     async def play_media(self, media: PlayerMedia) -> None:
         """Handle PLAY MEDIA command — store media for the kiosk to fetch."""
@@ -161,6 +155,8 @@ class WebKioskPlayer(Player):
         """Handle VOLUME_SET command."""
         self._attr_volume_level = volume_level
         self.update_state()
+        if not self._skip_ws_notify:
+            cast("WebKioskProvider", self.provider).notify_volume(self.player_id, volume_level)
 
     async def seek(self, position_seconds: int) -> None:
         """Handle SEEK command — send seek action to the kiosk via WebSocket."""

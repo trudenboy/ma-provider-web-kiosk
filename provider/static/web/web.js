@@ -94,9 +94,11 @@
                     audio.src = msg.path;
                     audio.play().catch(function () { /* autoplay blocked until interaction */ });
                     playing = true; sync();
+                    fetchLyrics();
                 }
                 break;
             case 'stop':
+                if (msg.showNotification && !confirm('Stop playback?')) break;
                 audio.pause(); audio.removeAttribute('src');
                 setCurrent({ title: '—', artist: '—', image: '', duration: 0 });
                 playing = false; sync();
@@ -108,7 +110,11 @@
                 audio.play().catch(function () { /* noop */ }); playing = true; sync();
                 break;
             case 'seek':
-                if (typeof msg.position === 'number') { audio.currentTime = msg.position; }
+                if (typeof msg.position === 'number') audio.currentTime = msg.position;
+                break;
+            case 'volume':
+                audio.volume = (msg.level || 0) / 100;
+                document.getElementById('volume').value = msg.level || 0;
                 break;
             case 'sendspin':
                 if (msg.url) location.href = msg.url;
@@ -210,7 +216,7 @@
 
     function openItem(item) {
         var t = itemType(item);
-        var provider = 'library';
+        var provider = item.provider || 'library';
         if (t === 'album') {
             setStatus('Loading…');
             rpc('music/albums/album_tracks', { item_id: item.item_id, provider_instance_id_or_domain: provider })
@@ -296,28 +302,37 @@
         cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
     }
 
-    // --- Lyrics ---
-    function fetchLyrics() {
-        if (!SHOW.lyrics || !playerId) { document.getElementById('kiosk-lyrics').classList.add('hidden'); return; }
-        fetch('/api/lyrics/' + encodeURIComponent(playerId)).then(function (r) { return r.json(); }).then(function (d) {
-            var el = document.getElementById('kiosk-lyrics');
-            var lines = parseLyrics(d);
-            lyricsLines = lines;
-            if (!lines.length) { el.classList.add('hidden'); return; }
+    // --- Lyrics (native API) ---
+    async function fetchLyrics() {
+        var el = document.getElementById('kiosk-lyrics');
+        if (!SHOW.lyrics || !playerId) { el.classList.add('hidden'); return; }
+        lyricsLines = []; lyricsIdx = -1;
+        try {
+            var q = await rpc('player_queues/get_active_queue', { player_id: playerId });
+            if (!q || !q.queue_id) { el.classList.add('hidden'); return; }
+            var items = await rpc('player_queues/items', { queue_id: q.queue_id, limit: 200 });
+            var idx = q.current_index != null ? q.current_index : 0;
+            var item = items[idx];
+            if (!item || !item.media_item) { el.classList.add('hidden'); return; }
+            var res = await rpc('metadata/get_track_lyrics', { track: item.media_item });
+            var lyrics = Array.isArray(res) ? res[0] : null;
+            var lrc = Array.isArray(res) ? res[1] : null;
+            lyricsLines = parseLyrics(lyrics, lrc);
+            if (!lyricsLines.length) { el.classList.add('hidden'); return; }
             el.classList.remove('hidden');
-            el.innerHTML = lines.map(function (l) { return '<div class="l">' + esc(l.text) + '</div>'; }).join('');
-        }).catch(function () { /* noop */ });
+            el.innerHTML = lyricsLines.map(function (l) { return '<div class="l">' + esc(l.text) + '</div>'; }).join('');
+        } catch (e) { el.classList.add('hidden'); }
     }
-    function parseLyrics(d) {
-        if (!d) return [];
-        if (d.lrc_lyrics) {
-            return d.lrc_lyrics.split('\n').map(function (l) {
-                var m = l.match(/\[(\d+):(\d+)(?:\.(\d+))?\]\s*(.*)/);
+    function parseLyrics(lyrics, lrc) {
+        if (lrc) {
+            return lrc.split('\n').map(function (line) {
+                var m = line.match(/\[(\d+):(\d+)(?:\.(\d+))?\]\s*(.*)/);
                 if (!m) return null;
-                return { t: (+m[1] * 60) + (+m[2]) + (+(m[3] || 0) / 100), text: m[4] };
+                var frac = m[3] ? parseInt(m[3], 10) / Math.pow(10, m[3].length) : 0;
+                return { t: (+m[1] * 60) + (+m[2]) + frac, text: m[4] };
             }).filter(Boolean).sort(function (a, b) { return a.t - b.t; });
         }
-        if (d.lyrics) return d.lyrics.split('\n').filter(Boolean).map(function (l) { return { t: 0, text: l }; });
+        if (lyrics) return lyrics.split('\n').filter(Boolean).map(function (l) { return { t: 0, text: l }; });
         return [];
     }
     function highlightLyrics() {
@@ -330,17 +345,21 @@
         nodes.forEach(function (n, i) { n.classList.toggle('active', i === idx); });
     }
 
-    // --- Party ---
-    function fetchParty() {
-        if (!SHOW.party) { document.getElementById('kiosk-party').classList.add('hidden'); return; }
-        fetch('/api/party').then(function (r) { return r.json(); }).then(function (d) {
-            var el = document.getElementById('kiosk-party');
-            if (!d || !d.active) { el.classList.add('hidden'); return; }
+    // --- Party (native status + provider QR) ---
+    async function fetchParty() {
+        var el = document.getElementById('kiosk-party');
+        if (!SHOW.party) { el.classList.add('hidden'); return; }
+        try {
+            var url = await rpc('party/url');
+            if (!url) { el.classList.add('hidden'); return; }
+            var cfg = await rpc('party/config');
+            var name = cfg && cfg.party_name;
+            var qrText = cfg && cfg.qr_text;
             el.classList.remove('hidden');
-            el.innerHTML = '<img src="/api/party/qr.svg?v=' + encodeURIComponent(d.qr_version || '') + '" alt="Join">' +
-                (d.name ? '<div class="name">' + esc(d.name) + '</div>' : '') +
-                (d.qr_text ? '<div class="qr">' + esc(d.qr_text) + '</div>' : '');
-        }).catch(function () { /* noop */ });
+            el.innerHTML = '<img src="/api/party/qr.svg" alt="Join">' +
+                (name ? '<div class="name">' + esc(name) + '</div>' : '') +
+                (qrText ? '<div class="qr">' + esc(qrText) + '</div>' : '');
+        } catch (e) { el.classList.add('hidden'); }
     }
 
     // --- Queue ---
@@ -377,7 +396,11 @@
         document.getElementById('k-play').onclick = function () { cmd(playing ? 'players/cmd/pause' : 'players/cmd/play'); };
         document.getElementById('k-next').onclick = function () { cmd('players/cmd/next'); };
         document.getElementById('k-prev').onclick = function () { cmd('players/cmd/previous'); };
-        document.getElementById('volume').oninput = function (e) { cmd('players/cmd/volume_set', { volume_level: Number(e.target.value) }); };
+        document.getElementById('volume').oninput = function (e) {
+            var v = Number(e.target.value);
+            audio.volume = v / 100;
+            cmd('players/cmd/volume_set', { volume_level: v });
+        };
         var seek = document.getElementById('seek');
         seek.oninput = function (e) { var t = (Number(e.target.value) / 1000) * (current.duration || 0); audio.currentTime = t; cmd('players/cmd/seek', { position: Math.round(t) }); };
         var kseek = document.getElementById('kiosk-seek');
@@ -431,6 +454,9 @@
     });
 
     // --- Sendspin ---
+    function getDefaultSendspinUrl() {
+        return 'http://' + location.hostname + ':8927';
+    }
     async function initSendspin() {
         if (!SENDSPIN) return;
         setStatus('Connecting Sendspin…');
@@ -438,7 +464,7 @@
             var module = await import('./sendspin-js/index.js');
             var SendspinPlayer = module.SendspinPlayer;
             var bridgeClientId = params.get('sendspin_client_id');
-            var sendspinUrl = params.get('sendspin_url') || '';
+            var sendspinUrl = params.get('sendspin_url') || getDefaultSendspinUrl();
             var cfg = {
                 playerId: bridgeClientId || ('web-kiosk-' + deviceId.substring(0, 8)),
                 baseUrl: sendspinUrl,
