@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Web Kiosk</title>
+<style>
+:root { --bg:#0c0c10; --panel:#17171d; --panel2:#1f1f27; --fg:#ececf2; --muted:#9a9aa6; --accent:#4f8cff; }
+* { box-sizing:border-box; margin:0; padding:0; }
+html,body { height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,sans-serif; overflow:hidden; }
+#app { display:flex; flex-direction:column; height:100%; }
+header { display:flex; align-items:center; gap:14px; padding:12px 20px; background:var(--panel); border-bottom:1px solid #26262e; }
+header h1 { font-size:18px; font-weight:600; white-space:nowrap; }
+#search { flex:1; max-width:380px; margin-left:auto; padding:8px 12px; border-radius:8px; border:1px solid #2a2a32; background:#101014; color:var(--fg); }
+nav { display:flex; gap:4px; padding:8px 20px; background:var(--panel); overflow-x:auto; }
+nav button { background:transparent; color:var(--muted); border:none; padding:8px 14px; border-radius:8px; cursor:pointer; font-size:14px; white-space:nowrap; }
+nav button.active { background:#26262e; color:var(--fg); }
+#crumbs { display:none; padding:8px 20px 0; font-size:13px; color:var(--muted); }
+#crumbs button { background:none; border:none; color:var(--accent); cursor:pointer; font-size:13px; padding:0 4px; }
+main { flex:1; overflow-y:auto; padding:16px 20px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:14px; }
+.card { background:var(--panel); border-radius:12px; overflow:hidden; cursor:pointer; transition:transform .1s; }
+.card:hover { transform:translateY(-2px); }
+.card img { width:100%; aspect-ratio:1; object-fit:cover; background:#22222a; display:block; }
+.card .meta { padding:10px; }
+.card .title { font-size:14px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.card .sub { font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.list .row { display:flex; align-items:center; gap:12px; padding:8px; border-radius:8px; cursor:pointer; }
+.list .row:hover { background:#22222a; }
+.list .row img { width:44px; height:44px; border-radius:6px; object-fit:cover; background:#22222a; flex-shrink:0; }
+.list .row .meta { flex:1; min-width:0; }
+.list .row .title { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.list .row .sub { color:var(--muted); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.list .row .dur { color:var(--muted); font-size:13px; margin-left:auto; }
+.empty { color:var(--muted); padding:40px; text-align:center; }
+footer { display:flex; align-items:center; gap:14px; padding:10px 20px; background:var(--panel); border-top:1px solid #26262e; }
+footer img { width:52px; height:52px; border-radius:8px; object-fit:cover; background:#22222a; }
+#now { flex:1; min-width:0; }
+#now .t { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#now .a { color:var(--muted); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#now input[type=range] { width:100%; }
+#bar { display:flex; align-items:center; gap:8px; }
+button.icon { background:transparent; color:var(--fg); border:none; font-size:24px; cursor:pointer; padding:6px; }
+button.icon:hover { color:var(--accent); }
+#volume { width:90px; }
+.status { font-size:12px; color:var(--muted); padding:4px 20px; min-height:20px; background:var(--panel); }
+
+/* --- Kiosk mode --- */
+body.kiosk { background:#000; }
+body.kiosk #app { display:none; }
+#kiosk { display:none; position:fixed; inset:0; background:#000; color:#fff; overflow:hidden; }
+body.kiosk #kiosk { display:block; }
+#kiosk-bg { position:absolute; inset:0; background-size:cover; background-position:center; filter:blur(40px) brightness(.4); transform:scale(1.1); transition:opacity .8s; }
+#kiosk-bg img { width:100%; height:100%; object-fit:cover; opacity:0; transition:opacity .8s; }
+#kiosk-center { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:40px; z-index:2; }
+#kiosk-art { width:min(46vh,46vw); height:min(46vh,46vw); border-radius:14px; object-fit:cover; background:#16161c; box-shadow:0 20px 60px rgba(0,0,0,.6); }
+#kiosk-title { font-size:clamp(20px,4vw,44px); font-weight:700; text-align:center; text-shadow:0 2px 20px rgba(0,0,0,.8); }
+#kiosk-artist { font-size:clamp(15px,2.6vw,26px); color:#cfcfe0; text-align:center; }
+#kiosk-progress { width:min(70vw,640px); display:flex; align-items:center; gap:12px; font-variant-numeric:tabular-nums; color:#cfcfe0; }
+#kiosk-progress input { flex:1; }
+#kiosk-controls { position:absolute; left:0; right:0; bottom:0; display:flex; justify-content:center; gap:22px; padding:26px; z-index:6; opacity:0; transition:opacity .4s; background:linear-gradient(transparent, rgba(0,0,0,.8)); }
+#kiosk-controls.visible { opacity:1; }
+#kiosk-controls button { font-size:40px; background:rgba(255,255,255,.08); border:none; color:#fff; width:72px; height:72px; border-radius:50%; cursor:pointer; }
+#kiosk-controls button:hover { background:rgba(255,255,255,.2); }
+#kiosk-viz { position:absolute; inset:0; z-index:1; width:100%; height:100%; }
+#kiosk-lyrics { position:absolute; left:24px; top:50%; transform:translateY(-50%); width:min(420px,32vw); max-height:60vh; overflow:hidden; z-index:4; text-align:left; }
+#kiosk-lyrics .l { font-size:15px; color:rgba(255,255,255,.45); padding:4px 0; transition:color .3s; }
+#kiosk-lyrics .l.active { color:#fff; font-weight:600; font-size:17px; }
+#kiosk-party { position:absolute; right:28px; bottom:110px; z-index:5; text-align:center; }
+#kiosk-party img { width:150px; height:150px; border-radius:12px; background:#fff; padding:6px; }
+#kiosk-party .name { font-size:14px; color:#cfcfe0; margin-top:6px; }
+#kiosk-party .qr { font-size:12px; color:#9a9aa6; margin-top:2px; }
+#kiosk-queue { position:absolute; right:28px; top:28px; width:min(340px,30vw); max-height:55vh; overflow-y:auto; z-index:4; background:rgba(10,10,14,.55); border-radius:12px; padding:12px; backdrop-filter:blur(8px); }
+#kiosk-queue .qrow { display:flex; align-items:center; gap:10px; padding:6px; border-radius:8px; font-size:14px; }
+#kiosk-queue .qrow.active { background:rgba(255,255,255,.12); }
+#kiosk-queue .qrow img { width:34px; height:34px; border-radius:5px; object-fit:cover; }
+#kiosk-queue .qrow .qt { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#kiosk-queue .qrow .qa { color:#9a9aa6; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#kiosk-sync { position:absolute; top:16px; left:50%; transform:translateX(-50%); z-index:6; font-size:12px; letter-spacing:1px; color:#9a9aa6; padding:6px 12px; border-radius:20px; background:rgba(10,10,14,.5); }
+#kiosk-sync.synced { color:#7ce38b; }
+#kiosk-sync.error { color:#ff8a8a; }
+.hidden { display:none !important; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Web Kiosk</h1>
+    <input id="search" placeholder="Search library…">
+  </header>
+  <nav id="menu"></nav>
+  <div id="crumbs"></div>
+  <main id="content"><div class="empty">Loading…</div></main>
+  <div class="status" id="status"></div>
+  <footer>
+    <img id="art" alt="">
+    <div id="now">
+      <div class="t">—</div>
+      <div class="a">—</div>
+      <input type="range" id="seek" min="0" max="1000" value="0">
+    </div>
+    <div id="bar">
+      <button class="icon" id="prev">⏮</button>
+      <button class="icon" id="play">▶</button>
+      <button class="icon" id="next">⏭</button>
+      <input type="range" id="volume" min="0" max="100" value="100" title="Volume">
+    </div>
+  </footer>
+</div>
+
+<div id="kiosk">
+  <canvas id="kiosk-viz"></canvas>
+  <div id="kiosk-bg"><img id="kiosk-bg-img" alt=""></div>
+  <div id="kiosk-center">
+    <img id="kiosk-art" alt="">
+    <div id="kiosk-title">—</div>
+    <div id="kiosk-artist">—</div>
+    <div id="kiosk-progress">
+      <span id="kiosk-time">0:00</span>
+      <input type="range" id="kiosk-seek" min="0" max="1000" value="0">
+      <span id="kiosk-dur">0:00</span>
+    </div>
+  </div>
+  <div id="kiosk-sync"></div>
+  <div id="kiosk-lyrics" class="hidden"></div>
+  <div id="kiosk-queue" class="hidden"></div>
+  <div id="kiosk-party" class="hidden"></div>
+  <div id="kiosk-controls">
+    <button id="k-prev">⏮</button>
+    <button id="k-play">▶</button>
+    <button id="k-next">⏭</button>
+  </div>
+</div>
+
+<script src="/web/web.js"></script>
+</body>
+</html>
