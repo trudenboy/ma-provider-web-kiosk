@@ -90,8 +90,6 @@ class WebKioskProvider(PlayerProvider):
                 required=False,
                 default_value=self._compose_kiosk_url(),
                 read_only=True,
-                description="Open this URL in the kiosk browser. Append &token=<auth token> "
-                "to enable MA API access.",
             ),
         )
 
