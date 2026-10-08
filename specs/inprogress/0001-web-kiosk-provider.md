@@ -20,13 +20,13 @@ or shipped independently.
 ## Solution Summary
 
 Introduce a thin standalone `web_kiosk` player provider. It runs a minimal
-embedded HTTP server that only serves the kiosk SPA (`/web`), a per-player
-push WebSocket (`/ws`), and a health endpoint (`/health`); it registers each
-browser as a dedicated `WebKioskPlayer` (`wk_`-prefixed id). Everything else is
-delegated to Music Assistant's own native API: the kiosk frontend browses,
-searches, manages the queue, fetches lyrics and party status, and sends
-playback commands through MA's JSON-RPC API (`POST /api`) and WebSocket
-(`/ws`), exactly like the built-in MA web interface. HTML5 audio is served by
+embedded HTTP server that serves the kiosk SPA (`/web` and `/web?kiosk=1` are
+the same player screen), a per-player push WebSocket (`/ws`), a health
+endpoint (`/health`), and the tokenized `/stream` redirect. It registers each
+browser as a dedicated `WebKioskPlayer` (`wk_`-prefixed id). Music is chosen
+in Music Assistant. The screen shows the current item and sends transport,
+volume, queue, lyrics, and party commands through a same-origin proxy to MA's
+JSON-RPC API (`POST /api`). HTML5 audio is served by
 the MA streamserver; Sendspin multiroom is provided by a web-kiosk bridge role
 that registers the kiosk as an external Sendspin client and opens the kiosk in
 Sendspin mode when a synchronized stream starts. The corresponding
@@ -38,21 +38,27 @@ behaviour unchanged) for removal in a future release.
 1. Installing the `web_kiosk` provider serves `/web` and registers a browser
    client as a Music Assistant player (`wk_`-prefixed id) with the
    PLAY_MEDIA / PAUSE / SEEK / VOLUME_SET feature set.
-2. The provider's own HTTP server exposes only the kiosk SPA, the per-player
-   push WebSocket, and `/health` — it does not duplicate MA library/search/
-   queue/party endpoints.
-3. The kiosk frontend drives library browsing, search, queue, lyrics, and
-   party status through MA's native JSON-RPC (`POST /api`) and WebSocket
-   (`/ws`) APIs.
+2. The provider's own HTTP server serves the kiosk SPA, the per-player push
+   WebSocket, `/health`, and `/stream`. It proxies `POST /api` and image
+   requests to Music Assistant so the page stays on one origin. It does not
+   implement its own library.
+3. The kiosk screen shows the current item, transport, volume, queue, lyrics,
+   and party status. Those commands go through the same-origin proxy. Browsing
+   and search stay in Music Assistant. `/web` and `/web?kiosk=1` both open
+   this screen.
 4. HTML5 playback works: the provider resolves a MA streamserver URL for the
    player's current media and pushes it to the kiosk over `/ws`; the kiosk
    reports `position`/`pause`/`resume`/`seek` and the provider updates player
    state.
-5. Sendspin multiroom works: the kiosk's vendored Sendspin JS client registers
-   as a Sendspin client and joins sample-synchronized groups; the web-kiosk
-   bridge opens the kiosk in Sendspin mode when a synchronized stream starts;
-   when Sendspin is unavailable the provider degrades to HTTP playback without
-   failing to load.
+5. Sendspin multiroom works on Music Assistant 2.11 (aiosendspin 10.0.0,
+   Sendspin 1.0.0-rc1): the kiosk vendors sendspin-js 5.0.0, announces that
+   browser's cryptographic client id, and the bridge registers the external
+   player under the same id. A synchronized stream opens the kiosk in Sendspin
+   mode; the JS client connects with the stored identity and takes over the
+   bridge. When Sendspin is unavailable the provider degrades to HTTP playback
+   without failing to load. sendspin-js 5.0.0 is the newest published client
+   and speaks the wire aiosendspin 10 still accepts while legacy clients are
+   allowed (the 2.11 default).
 6. `msx_bridge` marks its web-kiosk functionality deprecated via a canonical
    `### Deprecated` CHANGELOG entry and doc notes only; runtime behaviour and
    URLs stay unchanged.
@@ -70,11 +76,15 @@ behaviour unchanged) for removal in a future release.
   stop/seek/volume, WS position acceptance, poll availability.
 - `tests/test_http_server.py` — `/web`, `/ws`, `/health` routes; stream URL
   push payload; cross-site rejection (403).
-- `tests/test_sendspin_bridge.py` — bridge client-id derivation, registration
-  payload, stream-start → kiosk-open, connect timeout fallback to HTTP.
-- Manual: open `/web?kiosk=1` in a browser, confirm MA-native browsing,
-  HTML5 playback, party QR overlay, and (with Sendspin enabled) synchronized
-  playback in a group.
+- `tests/test_sendspin_bridge.py` — browser client-id acceptance, bridge
+  policy, stream-start → kiosk-open, connect timeout fallback to HTTP,
+  identity replacement.
+- `tests/test_sendspin_assets.py` — vendored sendspin-js 5.0.0 imports resolve
+  for a browser loading the static tree.
+- Manual: open `/web` and `/web?kiosk=1`, confirm both are the player screen,
+  start playback from Music Assistant, and confirm title, duration, transport,
+  volume, queue, lyrics, and party QR. With Sendspin enabled, confirm
+  synchronized playback in a group.
 
 ## Sequence Diagram
 
@@ -92,9 +102,11 @@ sequenceDiagram
     K->>P: get_or_register_player(wk_<device>)
     P->>M: players.register(WebKioskPlayer)
 
-    Note over B,M: Library / playback via MA native API
-    B->>M: POST /api (music/search, player_queues/play_media, players/cmd_*)
-    M-->>B: results / player state over /ws
+    Note over B,K: Now playing, transport, queue, lyrics, and party
+    B->>K: POST /api (player_queues/*, players/cmd/*, metadata/*, party/*)
+    K->>M: forward to Music Assistant
+    M-->>K: command result
+    K-->>B: result
 
     Note over B,P: HTML5 playback
     M-->>P: play_media() -> store media
@@ -104,11 +116,12 @@ sequenceDiagram
     B->>K: WS position/pause/resume/seek
 
     Note over B,S: Sendspin multiroom
-    P->>S: register_external_player(bridge hello)
+    B->>K: WS /ws?sendspin_client_id=<sendspin-js 5 identity>
+    P->>S: register_external_player(that client_id)
     S-->>P: on_stream_start(request)
     P->>K: broadcast_sendspin(/web?kiosk=1&sendspin=1&sendspin_client_id=...)
     K-->>B: WS "sendspin" -> open URL
-    B->>S: Sendspin handshake (same client_id)
+    B->>S: Sendspin handshake (same stored identity)
     S-->>B: sample-synchronized audio
 ```
 
@@ -124,11 +137,17 @@ New provider config entries (all in `strings.json`):
 | `enable_sendspin_bridge` | BOOLEAN | `true` | register kiosk as external Sendspin client |
 
 Player id scheme: `wk_<sanitized device_id or ip>` (prefix `WEB_KIOSK_PLAYER_ID_PREFIX`).
-Sendspin bridge client id: `spb_wk_<player id sans prefix>`.
+Sendspin bridge client id: the sendspin-js 5.0.0 identity the browser announces
+on `/ws` (`sendspin_client_id`, base64url, 16–128 chars). It is not derived
+from the `wk_` player id. A synthetic `spb_wk_` id is rejected.
 
 WebSocket messages (MA → kiosk): `play`, `stop`, `pause`, `resume`, `seek`,
 `volume`, `sendspin`. WebSocket messages (kiosk → MA): `position`, `pause`,
 `resume`, `seek`.
+
+The `play` message carries the song `duration` and `start`, the offset where
+the served audio begins in that song. A following `seek` carries seconds into
+the served audio. The on-screen clock is `start` plus that position.
 
 Lyrics and party status are read through MA's native JSON-RPC API
 (`metadata/get_track_lyrics`, `party/url`, `party/config`). The single

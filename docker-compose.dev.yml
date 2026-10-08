@@ -1,0 +1,30 @@
+# Local Music Assistant nightly with the Web Kiosk provider preloaded.
+#
+#   docker compose -f docker-compose.dev.yml up -d
+#   docker compose -f docker-compose.dev.yml logs -f
+#   docker compose -f docker-compose.dev.yml down
+#
+# UI:    http://localhost:8095
+# Kiosk: http://localhost:8098   (after the provider instance is enabled)
+# Sendspin: port 8927
+# Data dir .ma-data/ is gitignored.
+
+name: ma-web-kiosk
+
+services:
+  ma:
+    image: ghcr.io/music-assistant/server:nightly
+    container_name: ma-web-kiosk
+    ports:
+      - "8095:8095"
+      - "8097:8097"
+      - "8098:8098"
+      - "8927:8927"
+    privileged: true
+    restart: "no"
+    volumes:
+      - ./.ma-data:/data
+      - ./provider/:/tmp/provider:ro
+      - ./pyproject.toml:/tmp/pyproject.toml:ro
+      - ./scripts/docker-init.sh:/init.sh:ro
+    entrypoint: ["/bin/sh", "/init.sh"]

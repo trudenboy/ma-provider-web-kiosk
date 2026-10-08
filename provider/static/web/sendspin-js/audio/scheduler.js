@@ -8,6 +8,7 @@
 import { ClockSource } from "./clock-source.js";
 import { RecorrectionMonitor, RECORRECTION_CUTOVER_GUARD_SEC, } from "./recorrection-monitor.js";
 import { OutputLatencyTracker } from "./output-latency-tracker.js";
+import { getUnreportedOutputLatencyMs } from "./platform-output-latency.js";
 import { clampSyncDelayMs } from "../sync-delay.js";
 // Sync correction constants
 const SAMPLE_CORRECTION_FADE_LEN = 8;
@@ -19,8 +20,11 @@ for (let f = 0; f < SAMPLE_CORRECTION_FADE_LEN; f++) {
         ((SAMPLE_CORRECTION_FADE_LEN - f) / (SAMPLE_CORRECTION_FADE_LEN + 1)) *
             SAMPLE_CORRECTION_FADE_STRENGTH;
 }
-const SYNC_ERROR_ALPHA = 0.1;
-const SCHEDULE_HEADROOM_SEC = 0.2;
+// Playback-rate correction tiers, both within the ±0.5% spec cap (inaudible).
+const RATE_CORRECTION_SOFT = 0.003;
+const RATE_CORRECTION_FIRM = 0.005;
+// EMA weight for the sync error. Lower smooths clock noise but slows drift response. Exported only for tests.
+export const SYNC_ERROR_ALPHA = 0.05;
 const SCHEDULE_HORIZON_PRECISE_SEC = 20;
 const SCHEDULE_HORIZON_GOOD_SEC = 8;
 const SCHEDULE_HORIZON_POOR_SEC = 4;
@@ -100,6 +104,9 @@ export class AudioScheduler {
         this._correctionMode = options.correctionMode ?? "sync";
         this.useOutputLatencyCompensation =
             options.useOutputLatencyCompensation ?? true;
+        this.unreportedOutputLatencySec = this.useOutputLatencyCompensation
+            ? getUnreportedOutputLatencyMs() / 1000
+            : 0;
         // Merge user-provided threshold overrides with defaults
         this.correctionThresholds = { ...DEFAULT_CORRECTION_THRESHOLDS };
         const thresholdOverrides = options.correctionThresholds;
@@ -145,6 +152,15 @@ export class AudioScheduler {
     get usesImmediateDelayCutover() {
         return this.correctionThresholds[this._correctionMode]
             .immediateDelayCutover;
+    }
+    /**
+     * Smoothed baseLatency + outputLatency in seconds: how long audio handed to
+     * the renderer takes to reach the output port. Read on every scheduling pass
+     * (even with compensation disabled) because the clock source needs it to keep
+     * both of its clocks in the render-clock domain.
+     */
+    measurePlayoutLatencySec() {
+        return this.latencyTracker.getSmoothedUs(this.audioContext) / 1000000;
     }
     getTargetScheduledHorizonSec() {
         if (this.isCastRuntime) {
@@ -230,7 +246,8 @@ export class AudioScheduler {
             this.recorrectionMonitor.resetCheckState();
             return;
         }
-        const { audioContextTimeSec, audioContextRawTimeSec, nowMs, nowUs } = this.clockSource.getTimingSnapshot(this.audioContext);
+        const playoutLatencySec = this.measurePlayoutLatencySec();
+        const { audioContextTimeSec, audioContextRawTimeSec, nowMs, nowUs } = this.clockSource.getTimingSnapshot(this.audioContext, playoutLatencySec);
         this.pruneExpiredScheduledSources(audioContextRawTimeSec);
         if (this.getScheduledAheadSec(audioContextRawTimeSec) <= 0) {
             this.recorrectionMonitor.resetCheckState();
@@ -239,7 +256,7 @@ export class AudioScheduler {
             return;
         }
         const outputLatencySec = this.useOutputLatencyCompensation
-            ? this.latencyTracker.getSmoothedUs(this.audioContext) / 1000000
+            ? playoutLatencySec
             : 0;
         const targetPlaybackTime = this.computeTargetPlaybackTime(this.lastScheduledServerTime, audioContextTimeSec, nowUs, outputLatencySec);
         const syncErrorMs = (this.nextPlaybackTime - targetPlaybackTime) * 1000;
@@ -278,7 +295,8 @@ export class AudioScheduler {
             clockDriftPercent: this.timeFilter.drift * 100,
             syncErrorMs: this.currentSyncErrorMs,
             resyncCount: this.resyncCount,
-            outputLatencyMs: this.latencyTracker.getRawUs(this.audioContext) / 1000,
+            outputLatencyMs: this.latencyTracker.getRawUs(this.audioContext) / 1000 +
+                this.unreportedOutputLatencySec * 1000,
             playbackRate: this.currentPlaybackRate,
             correctionMethod: this.currentCorrectionMethod,
             samplesAdjusted: this.lastSamplesAdjusted,
@@ -321,7 +339,7 @@ export class AudioScheduler {
             ? `synced(err=${(this.timeFilter.error / 1000).toFixed(1)}ms,drift=${this.timeFilter.drift.toFixed(3)},n=${this.timeFilter.count})`
             : `pending(n=${this.timeFilter.count})`;
         const smoothedLatUs = this.latencyTracker.getSmoothedUs(this.audioContext);
-        const latMs = Math.round(smoothedLatUs / 1000);
+        const latMs = Math.round(smoothedLatUs / 1000 + this.unreportedOutputLatencySec * 1000);
         console.log(`Sendspin: sync=${this.smoothedSyncErrorMs >= 0 ? "+" : ""}${this.smoothedSyncErrorMs.toFixed(1)}ms` +
             ` corr=${corr} q=${queueDepth}/${aheadSec.toFixed(1)}s resyncs=${this._intervalResyncCount}` +
             ` clock=${clock} tf=${tf} lat=${latMs}ms mode=${this._correctionMode}` +
@@ -446,14 +464,8 @@ export class AudioScheduler {
     }
     async resumeAudioContext() {
         if (this.audioContext && this.audioContext.state === "suspended") {
-            try {
-                await this.audioContext.resume();
-                console.log("Sendspin: AudioContext resumed");
-            }
-            catch (e) {
-                console.warn("Sendspin: Failed to resume AudioContext:", e);
-                return;
-            }
+            await this.audioContext.resume();
+            console.log("Sendspin: AudioContext resumed");
             if (this.audioBufferQueue.length > 0)
                 this.scheduleQueueProcessing();
             if (this.usesRecorrectionMonitor)
@@ -486,6 +498,11 @@ export class AudioScheduler {
             cutCount++;
             return false;
         });
+        // Requeued sources predate the chunks still queued, and a cut from the drain
+        // loop lands after that loop's own sort.
+        if (requeued > 0) {
+            this.audioBufferQueue.sort((a, b) => a.serverTime - b.serverTime);
+        }
         return { requeuedCount: requeued, cutCount, keptTailEndTimeSec };
     }
     updateVolume() {
@@ -615,12 +632,13 @@ export class AudioScheduler {
         this.audioBufferQueue.sort((a, b) => a.serverTime - b.serverTime);
         if (!this.timeFilter.is_synchronized)
             return;
-        const { audioContextTimeSec: audioContextTime, audioContextRawTimeSec, nowMs, nowUs, } = this.clockSource.getTimingSnapshot(this.audioContext);
+        const playoutLatencySec = this.measurePlayoutLatencySec();
+        const { audioContextTimeSec: audioContextTime, audioContextRawTimeSec, nowMs, nowUs, } = this.clockSource.getTimingSnapshot(this.audioContext, playoutLatencySec);
         this.pruneExpiredScheduledSources(audioContextRawTimeSec);
         const outputLatencySec = this.useOutputLatencyCompensation
-            ? this.latencyTracker.getSmoothedUs(this.audioContext) / 1000000
+            ? playoutLatencySec
             : 0;
-        const syncDelaySec = this.syncDelayMs / 1000;
+        const scheduleAdvanceSec = this.syncDelayMs / 1000 + this.unreportedOutputLatencySec;
         const targetScheduledHorizonSec = this.getTargetScheduledHorizonSec();
         if (this.usesRecorrectionMonitor)
             this.recorrectionMonitor.start();
@@ -650,15 +668,19 @@ export class AudioScheduler {
             if (this.nextPlaybackTime === 0 || this.lastScheduledServerTime === 0) {
                 this.recorrectionMonitor.armStartupGrace(nowMs, isTimestamp);
                 playbackTime = targetPlaybackTime;
-                scheduleTime = playbackTime - syncDelaySec;
+                scheduleTime = playbackTime - scheduleAdvanceSec;
                 const minScheduleTimeSec = this.recorrectionMonitor.minScheduleTimeSec;
                 if (minScheduleTimeSec !== null) {
+                    // After a cutover, drop backlog that ends at or before the kept tail
+                    // rather than clamping it forward, so the snap claws back lateness.
+                    if (scheduleTime + chunk.buffer.duration <= minScheduleTimeSec) {
+                        continue;
+                    }
                     scheduleTime = Math.max(scheduleTime, minScheduleTimeSec);
-                    playbackTime = scheduleTime + syncDelaySec;
+                    playbackTime = scheduleTime + scheduleAdvanceSec;
                 }
                 this.recorrectionMonitor.clearMinScheduleTime();
                 playbackRate = 1.0;
-                chunk.buffer = this.copyBuffer(chunk.buffer);
             }
             else {
                 const serverGapUs = chunk.serverTime - this.lastScheduledServerTime;
@@ -675,26 +697,24 @@ export class AudioScheduler {
                         this.resyncCount++;
                         this._intervalResyncCount++;
                         this.resetSyncErrorEma();
-                        this.cutScheduledSources(targetPlaybackTime - syncDelaySec);
+                        this.cutScheduledSources(targetPlaybackTime - scheduleAdvanceSec);
                         playbackTime = targetPlaybackTime;
-                        scheduleTime = playbackTime - syncDelaySec;
+                        scheduleTime = playbackTime - scheduleAdvanceSec;
                         playbackRate = 1.0;
                         this.currentCorrectionMethod = "resync";
                         this.lastSamplesAdjusted = 0;
-                        chunk.buffer = this.copyBuffer(chunk.buffer);
                     }
                     else if (Math.abs(correctionErrorMs) > thresholds.resyncAboveMs) {
                         playbackTime = this.nextPlaybackTime;
                         scheduleTime = this.nextScheduleTime;
                         playbackRate = Number.isFinite(thresholds.rate2AboveMs)
                             ? correctionErrorMs > 0
-                                ? 1.02
-                                : 0.98
+                                ? 1 + RATE_CORRECTION_FIRM
+                                : 1 - RATE_CORRECTION_FIRM
                             : 1.0;
                         this.currentCorrectionMethod =
                             playbackRate === 1.0 ? "none" : "rate";
                         this.lastSamplesAdjusted = 0;
-                        chunk.buffer = this.copyBuffer(chunk.buffer);
                     }
                     else if (Math.abs(correctionErrorMs) < thresholds.deadbandBelowMs) {
                         playbackTime = this.nextPlaybackTime;
@@ -702,7 +722,6 @@ export class AudioScheduler {
                         playbackRate = 1.0;
                         this.currentCorrectionMethod = "none";
                         this.lastSamplesAdjusted = 0;
-                        chunk.buffer = this.copyBuffer(chunk.buffer);
                     }
                     else if (Math.abs(correctionErrorMs) <= thresholds.samplesBelowMs) {
                         playbackTime = this.nextPlaybackTime;
@@ -720,23 +739,22 @@ export class AudioScheduler {
                         if (correctionErrorMs > 0) {
                             playbackRate =
                                 absErrorMs >= thresholds.rate2AboveMs
-                                    ? 1.02
+                                    ? 1 + RATE_CORRECTION_FIRM
                                     : absErrorMs >= thresholds.rate1AboveMs
-                                        ? 1.01
+                                        ? 1 + RATE_CORRECTION_SOFT
                                         : 1.0;
                         }
                         else {
                             playbackRate =
                                 absErrorMs >= thresholds.rate2AboveMs
-                                    ? 0.98
+                                    ? 1 - RATE_CORRECTION_FIRM
                                     : absErrorMs >= thresholds.rate1AboveMs
-                                        ? 0.99
+                                        ? 1 - RATE_CORRECTION_SOFT
                                         : 1.0;
                         }
                         this.currentCorrectionMethod =
                             playbackRate === 1.0 ? "none" : "rate";
                         this.lastSamplesAdjusted = 0;
-                        chunk.buffer = this.copyBuffer(chunk.buffer);
                     }
                 }
                 else {
@@ -745,14 +763,13 @@ export class AudioScheduler {
                         this.recorrectionMonitor.noteHardResync(nowMs);
                         this.resyncCount++;
                         this._intervalResyncCount++;
-                        this.cutScheduledSources(targetPlaybackTime - syncDelaySec);
+                        this.cutScheduledSources(targetPlaybackTime - scheduleAdvanceSec);
                     }
                     playbackTime = targetPlaybackTime;
-                    scheduleTime = playbackTime - syncDelaySec;
+                    scheduleTime = playbackTime - scheduleAdvanceSec;
                     playbackRate = 1.0;
                     this.currentCorrectionMethod = "resync";
                     this.lastSamplesAdjusted = 0;
-                    chunk.buffer = this.copyBuffer(chunk.buffer);
                 }
             }
             this.currentPlaybackRate = playbackRate;
@@ -797,10 +814,20 @@ export class AudioScheduler {
         this.scheduleQueueRefill(targetScheduledHorizonSec);
         this.emitStatusLog(nowMs);
     }
+    /**
+     * AudioContext time at which a chunk must be started so its first sample
+     * leaves the audio output port at the instant the server stamped it for.
+     *
+     * `audioContextTime` is the render clock, the same domain `source.start()`
+     * takes; audio handed to the renderer becomes audible one output latency
+     * later, so that latency is subtracted. Chunks whose target has already passed
+     * are dropped by the caller rather than shifted forward, which would render
+     * them late.
+     */
     computeTargetPlaybackTime(serverTimeUs, audioContextTime, nowUs, outputLatencySec) {
         const chunkClientTimeUs = this.timeFilter.computeClientTime(serverTimeUs);
         const deltaSec = (chunkClientTimeUs - nowUs) / 1000000;
-        return (audioContextTime + deltaSec + SCHEDULE_HEADROOM_SEC - outputLatencySec);
+        return audioContextTime + deltaSec - outputLatencySec;
     }
     startAudioElement() {
         if (this.outputMode === "media-element" && this.audioElement?.paused) {

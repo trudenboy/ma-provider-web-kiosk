@@ -8,7 +8,7 @@ from unittest.mock import Mock
 from music_assistant_models.enums import PlaybackState
 from music_assistant_models.player import PlayerMedia
 
-from music_assistant.providers.web_kiosk.player import WebKioskPlayer
+from music_assistant.providers.web_kiosk.player import WebKioskPlayer, media_timeline
 
 
 def _media() -> Mock:
@@ -39,6 +39,56 @@ async def test_play_media_notifies_kiosk(player: WebKioskPlayer) -> None:
     await player.play_media(_media())
 
     player.provider.http_server.broadcast_play.assert_called_once()  # type: ignore[attr-defined]
+
+
+def test_media_timeline_uses_song_length_after_seek() -> None:
+    """A shortened stream still belongs to the full song."""
+    media = Mock()
+    media.duration = 208
+    media.stream_duration = 62
+
+    assert media_timeline(media) == (208.0, 146.0)
+
+
+def test_media_timeline_without_stream_duration() -> None:
+    """Missing stream length means the audio starts at the beginning."""
+    media = Mock()
+    media.duration = 208
+    media.stream_duration = None
+
+    assert media_timeline(media) == (208.0, 0.0)
+
+
+def test_media_timeline_stream_only() -> None:
+    """A stream length alone is the only clock the screen can draw."""
+    media = Mock()
+    media.duration = None
+    media.stream_duration = 10
+
+    assert media_timeline(media) == (10.0, 0.0)
+
+
+def test_media_timeline_equal_durations_have_no_offset() -> None:
+    """Equal lengths mean the served audio is the whole song."""
+    media = Mock()
+    media.duration = 120
+    media.stream_duration = 120
+
+    assert media_timeline(media) == (120.0, 0.0)
+
+
+async def test_play_media_reports_song_length_and_stream_start(player: WebKioskPlayer) -> None:
+    """After a seek, the kiosk is told the song length and where the file starts."""
+    media = _media()
+    media.duration = 208
+    media.stream_duration = 62
+    player.provider.http_server = Mock()  # type: ignore[attr-defined]
+
+    await player.play_media(media)
+
+    kwargs = player.provider.http_server.broadcast_play.call_args.kwargs  # type: ignore[attr-defined]
+    assert kwargs["duration"] == 208.0
+    assert kwargs["start"] == 146.0
 
 
 async def test_pause_snapshots_elapsed_time(player: WebKioskPlayer) -> None:
@@ -75,6 +125,22 @@ async def test_seek_updates_elapsed(player: WebKioskPlayer) -> None:
     player.provider.http_server.broadcast_seek.assert_called_once_with(  # type: ignore[attr-defined]
         "wk_test", 30
     )
+
+
+def test_playback_reached_end_includes_seek_origin(player: WebKioskPlayer) -> None:
+    """A short remainder after a seek still counts as the end of the song."""
+    player._attr_current_media = Mock(duration=30, stream_duration=4)
+    player._attr_elapsed_time = 3
+
+    assert player.playback_reached_end() is True
+
+
+def test_playback_reached_end_is_false_early_in_the_song(player: WebKioskPlayer) -> None:
+    """The first seconds of a track are not the end."""
+    player._attr_current_media = Mock(duration=180, stream_duration=None)
+    player._attr_elapsed_time = 2
+
+    assert player.playback_reached_end() is False
 
 
 def test_update_position_ignored_while_paused(player: WebKioskPlayer) -> None:

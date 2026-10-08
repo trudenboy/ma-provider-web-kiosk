@@ -19,7 +19,9 @@ const ADAPTIVE_FORGETTING_CUTOFF = 2.0;
 export class SendspinTimeFilter {
     constructor(offset_process_std_dev = 0.01, forget_factor = 1.1, drift_significance_threshold = 2.0, drift_process_std_dev = 0.0) {
         this._last_update = 0;
+        // Maturity gate for the state machine and adaptive forgetting, caps at 100.
         this._count = 0;
+        this._measurements_processed = 0;
         this._offset = 0.0;
         this._drift = 0.0;
         this._offset_covariance = Infinity;
@@ -66,6 +68,7 @@ export class SendspinTimeFilter {
         }
         const dt = time_added - this._last_update;
         this._last_update = time_added;
+        this._measurements_processed += 1;
         const update_std_dev = max_error;
         const measurement_variance = update_std_dev * update_std_dev;
         // Filter initialization: First measurement establishes offset baseline
@@ -208,6 +211,7 @@ export class SendspinTimeFilter {
      */
     reset() {
         this._count = 0;
+        this._measurements_processed = 0;
         this._last_update = 0;
         this._offset = 0.0;
         this._drift = 0.0;
@@ -221,7 +225,7 @@ export class SendspinTimeFilter {
      * Get the number of time sync measurements processed.
      */
     get count() {
-        return this._count;
+        return this._measurements_processed;
     }
     /**
      * Check if time synchronization is ready for use.

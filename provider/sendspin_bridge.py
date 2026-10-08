@@ -1,12 +1,13 @@
 """
 Sendspin bridge: expose web kiosk players as external Sendspin clients.
 
-Follows the Chromecast receiver model: the bridge only registers the kiosk as an
-external Sendspin client and, when a synchronized stream starts, tells the kiosk
-(over the provider's own WebSocket) to open itself in Sendspin mode. The kiosk's
-vendored Sendspin JS client then connects to the Sendspin server with the same
-client id, and the server upgrades the client from the bridge role to a real
-player role — audio never flows through this bridge.
+Follows the Chromecast receiver model against Music Assistant 2.11
+(aiosendspin 10, Sendspin 1.0.0-rc1). The bridge registers the kiosk as an
+external Sendspin client under the cryptographic client id that sendspin-js 5
+minted in the browser. When a synchronized stream starts, the kiosk opens
+itself in Sendspin mode and connects with that same identity, and the server
+upgrades the client from the bridge role to a real player. Audio never flows
+through this bridge.
 """
 
 from __future__ import annotations
@@ -29,11 +30,7 @@ from music_assistant.providers.sendspin.bridge_role import (
     BridgePlayerRole,
 )
 
-from .constants import (
-    SENDSPIN_BRIDGE_CLIENT_PREFIX,
-    SENDSPIN_CONNECT_TIMEOUT,
-    WEB_KIOSK_PLAYER_ID_PREFIX,
-)
+from .constants import SENDSPIN_CONNECT_TIMEOUT
 from .player import WebKioskPlayer
 
 if TYPE_CHECKING:
@@ -44,11 +41,6 @@ if TYPE_CHECKING:
     from music_assistant.providers.sendspin.provider import SendspinProvider
 
     from .provider import WebKioskProvider
-
-
-def bridge_client_id_for(player_id: str) -> str:
-    """Return the stable Sendspin client id bridging the given kiosk player."""
-    return f"{SENDSPIN_BRIDGE_CLIENT_PREFIX}{player_id.removeprefix(WEB_KIOSK_PLAYER_ID_PREFIX)}"
 
 
 class WebKioskSendspinBridge:
@@ -182,23 +174,31 @@ class WebKioskSendspinBridgeManager(SendspinBridgeManagerBase[WebKioskSendspinBr
     """Manages Sendspin bridges for all web kiosk players."""
 
     def _bridge_client_id(self, player: Player) -> str | None:
-        """Return the Sendspin client_id used to bridge the given player."""
+        """Return the browser Sendspin identity bridging the given player."""
         if not isinstance(player, WebKioskPlayer):
             return None
-        return bridge_client_id_for(player.player_id)
+        return player.sendspin_client_id
 
     def _create_bridge(self, player: Player) -> WebKioskSendspinBridge:
         """Create a (not yet started) bridge for a kiosk player."""
         sendspin_server = self.sendspin_server
         assert sendspin_server is not None  # guaranteed by _lifecycle_allows_bridge
+        kiosk_player = cast("WebKioskPlayer", player)
+        client_id = kiosk_player.sendspin_client_id
+        if not client_id:
+            raise RuntimeError(f"Kiosk {kiosk_player.player_id} has no Sendspin client id")
         return WebKioskSendspinBridge(
             cast("WebKioskProvider", self.provider),
-            cast("WebKioskPlayer", player),
+            kiosk_player,
             sendspin_server,
-            bridge_client_id_for(player.player_id),
+            client_id,
         )
 
     def _should_have_bridge(self, player: Player) -> bool:
-        """Bridge policy: the option is enabled and the player is a web kiosk."""
+        """Bridge policy: the option is on, and the browser has announced an identity."""
         provider = cast("WebKioskProvider", self.provider)
-        return provider.sendspin_bridge_enabled and isinstance(player, WebKioskPlayer)
+        return (
+            provider.sendspin_bridge_enabled
+            and isinstance(player, WebKioskPlayer)
+            and bool(player.sendspin_client_id)
+        )

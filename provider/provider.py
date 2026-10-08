@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
 from music_assistant_models.config_entries import ConfigEntry
-from music_assistant_models.enums import ConfigEntryType
+from music_assistant_models.enums import ConfigEntryType, PlaybackState
 
 from music_assistant.models.player_provider import PlayerProvider
 
@@ -27,9 +27,11 @@ from .constants import (
     DEFAULT_HTTP_PORT,
     DEFAULT_PLAYER_IDLE_TIMEOUT,
     DEFAULT_SHOW_STOP_NOTIFICATION,
+    PLAYER_DISCONNECT_GRACE_SECONDS,
     WEB_KIOSK_PLAYER_ID_PREFIX,
 )
 from .http_server import WebKioskHTTPServer
+from .lyrics import parse_track_lyrics
 from .player import WebKioskPlayer
 
 if TYPE_CHECKING:
@@ -46,14 +48,18 @@ class WebKioskProvider(PlayerProvider):
     bridge_manager: WebKioskSendspinBridgeManager | None = None
     _player_last_activity: dict[str, float]
     _pending_unregisters: dict[str, asyncio.Event]
+    _disconnect_tasks: dict[str, asyncio.Task[None]]
     _stream_token_secret: bytes
     _timeout_task: asyncio.Task[None] | None = None
+    _wave_seq: dict[str, int]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize the provider."""
         super().__init__(*args, **kwargs)
         self._player_last_activity = {}
         self._pending_unregisters = {}
+        self._disconnect_tasks = {}
+        self._wave_seq = {}
         # one secret per provider instance; the per-player tokens derive from it
         self._stream_token_secret = secrets.token_bytes(32)
 
@@ -126,6 +132,7 @@ class WebKioskProvider(PlayerProvider):
 
     async def unload(self, is_removed: bool = False) -> None:
         """Handle unload — stop timeout task, HTTP server, then unregister players."""
+        self.cancel_all_player_closes()
         if self._timeout_task and not self._timeout_task.done():
             self._timeout_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -184,6 +191,69 @@ class WebKioskProvider(PlayerProvider):
             await self.bridge_manager.evaluate_bridge(player)
         return player
 
+    async def note_sendspin_client_id(self, player: WebKioskPlayer, client_id: str) -> None:
+        """
+        Store the browser's Sendspin identity and reconcile the bridge.
+
+        sendspin-js 5 mints a cryptographic client id. Music Assistant 2.11
+        (aiosendspin 10) only lets that browser take over the bridge when the
+        external player was registered under the same id. A changed identity
+        drops the previous bridge player so a stale Sendspin player does not
+        linger.
+        """
+        previous = player.sendspin_client_id
+        if previous == client_id:
+            if self.bridge_manager:
+                await self.bridge_manager.evaluate_bridge(player)
+            return
+        player.sendspin_client_id = client_id
+        if self.bridge_manager and previous:
+            await self.bridge_manager.remove_bridge(player.player_id, permanent=True)
+        if self.bridge_manager:
+            await self.bridge_manager.evaluate_bridge(player)
+
+    def schedule_player_close(self, player_id: str) -> None:
+        """
+        Remove the player unless a browser reconnects within the grace window.
+
+        The last socket closing is not enough to tell a closed tab from a reload.
+        A reload opens a new socket and cancels this. A closed page does not.
+        """
+        self.cancel_player_close(player_id)
+        self._disconnect_tasks[player_id] = self.mass.create_task(
+            self._unregister_if_browser_gone(player_id)
+        )
+
+    def cancel_player_close(self, player_id: str) -> None:
+        """Keep the player. A browser socket for it is open again."""
+        task = self._disconnect_tasks.pop(player_id, None)
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+
+    def cancel_all_player_closes(self) -> None:
+        """Drop every pending close. Used when the provider itself is stopping."""
+        for player_id in list(self._disconnect_tasks):
+            self.cancel_player_close(player_id)
+
+    async def _unregister_if_browser_gone(self, player_id: str) -> None:
+        """Unregister after the grace window if no browser socket came back."""
+        try:
+            await asyncio.sleep(PLAYER_DISCONNECT_GRACE_SECONDS)
+        except asyncio.CancelledError:
+            return
+        current = self._disconnect_tasks.get(player_id)
+        if current is not None and current is not asyncio.current_task():
+            return
+        self._disconnect_tasks.pop(player_id, None)
+        server = self.http_server
+        if server is not None and server.client_count(player_id) > 0:
+            return
+        player = self.mass.players.get_player(player_id, raise_unavailable=False)
+        if not isinstance(player, WebKioskPlayer):
+            return
+        self.logger.info("Unregistering kiosk player %s because its page closed", player_id)
+        await self._handle_player_unregister(player_id)
+
     def on_player_activity(self, player_id: str) -> None:
         """Record activity for a player (extends idle timeout)."""
         # Monotonic: a wall-clock NTP step must not age players past the cutoff
@@ -226,17 +296,132 @@ class WebKioskProvider(PlayerProvider):
         title: str | None = None,
         artist: str | None = None,
         image_url: str | None = None,
-        duration: int | None = None,
+        duration: float | None = None,
+        start: float = 0,
     ) -> None:
         """Notify the kiosk WebSocket client that playback started."""
         if self.http_server:
+            seq = self.next_wave_seq(player_id)
             self.http_server.broadcast_play(
                 player_id,
                 title=title,
                 artist=artist,
                 image_url=image_url,
                 duration=duration,
+                start=start,
+                wave_seq=seq,
             )
+            # The browser may have no Music Assistant token. The curve still
+            # belongs to the track this player is already decoding.
+            self.spawn_wave(player_id, seq)
+            self.spawn_lyrics(player_id, seq)
+
+    def next_wave_seq(self, player_id: str) -> int:
+        """Return the next energy-curve generation for this player."""
+        seq = self._wave_seq.get(player_id, 0) + 1
+        self._wave_seq[player_id] = seq
+        return seq
+
+    def spawn_wave(self, player_id: str, seq: int) -> None:
+        """Look up the current track's energy curve and send it to the page."""
+        self._spawn(self._publish_wave(player_id, seq))
+
+    def spawn_lyrics(self, player_id: str, seq: int) -> None:
+        """Look up the current track's lyrics and send them to the page."""
+        self._spawn(self._publish_lyrics(player_id, seq))
+
+    def _spawn(self, coro: Any) -> None:
+        """Schedule coro. A test double that hands the coroutine back is closed."""
+        task = self.mass.create_task(coro)
+        if asyncio.iscoroutine(task):
+            task.close()
+
+    async def _publish_wave(self, player_id: str, seq: int) -> None:
+        """Send the stored RMS curve for the player's current queue item."""
+        if self.http_server is None:
+            return
+        try:
+            bins = await self._current_wave(player_id)
+        except Exception:
+            logger.debug("Energy curve lookup failed for %s", player_id, exc_info=True)
+            bins = None
+        if self.http_server is not None:
+            self.http_server.broadcast_wave(player_id, seq, bins)
+
+    async def _current_wave(self, player_id: str) -> list[float] | None:
+        """Return the stored energy bins for the playing item, if analysis exists."""
+        queue = self.mass.player_queues.get_active_queue(player_id)
+        item = getattr(queue, "current_item", None)
+        media = getattr(item, "media_item", None)
+        mappings = getattr(media, "provider_mappings", None) or []
+        analysis = self.mass.streams.audio_analysis
+        for mapping in mappings:
+            item_id = getattr(mapping, "item_id", None)
+            provider = getattr(mapping, "provider_instance", None) or getattr(
+                mapping, "provider_domain", None
+            )
+            if not item_id or not provider:
+                continue
+            bins = await analysis.get_wave_form(str(item_id), str(provider))
+            if bins:
+                return [float(value) for value in bins]
+        return None
+
+    async def _publish_lyrics(self, player_id: str, seq: int) -> None:
+        """Send the current track's lyric lines to the kiosk page."""
+        if self.http_server is None:
+            return
+        try:
+            lines = await self._current_lyrics(player_id)
+        except Exception:
+            logger.debug("Lyrics lookup failed for %s", player_id, exc_info=True)
+            lines = []
+        if self.http_server is not None:
+            self.http_server.broadcast_lyrics(player_id, seq, lines)
+
+    async def _current_lyrics(self, player_id: str) -> list[dict[str, Any]]:
+        """Return parsed lyric lines for the playing item."""
+        queue = self.mass.player_queues.get_active_queue(player_id)
+        item = getattr(queue, "current_item", None)
+        media = getattr(item, "media_item", None)
+        if media is None:
+            return []
+        plain, lrc = await self.mass.metadata.get_track_lyrics(media)
+        return parse_track_lyrics(plain, lrc)
+
+    def track_ended(self, player_id: str) -> None:
+        """Advance the queue after the browser finishes its audio file."""
+        self._spawn(self._advance_after_track(player_id))
+
+    async def _advance_after_track(self, player_id: str) -> None:
+        """Play the next queue item, or stop when this track was the last one."""
+        player = self.mass.players.get_player(player_id)
+        if not isinstance(player, WebKioskPlayer) or player.playback_state != PlaybackState.PLAYING:
+            return
+        if player._track_end_handled or not player.playback_reached_end():
+            return
+        # One end event per play. play_media clears this when the next item starts.
+        player._track_end_handled = True
+        try:
+            queues = self.mass.player_queues
+            queue = queues.get_active_queue(player_id)
+            index = getattr(queue, "current_index", None)
+            nxt = (
+                queues.get_next_item(queue.queue_id, index)
+                if queue is not None and index is not None
+                else None
+            )
+            next_index = (
+                queues.index_by_id(queue.queue_id, nxt.queue_item_id) if nxt is not None else None
+            )
+            if next_index is None:
+                await self.mass.players.cmd_stop(player_id)
+                return
+            await queues.play_index(queue.queue_id, next_index)
+        except Exception:
+            logger.exception("Advancing after track end failed for %s", player_id)
+            with contextlib.suppress(Exception):
+                await self.mass.players.cmd_stop(player_id)
 
     def notify_play_paused(self, player_id: str) -> None:
         """Notify the kiosk WebSocket client that playback is paused."""
@@ -338,6 +523,7 @@ class WebKioskProvider(PlayerProvider):
 
     async def _handle_player_unregister(self, player_id: str) -> None:
         """Unregister a player with race-condition handling."""
+        self.cancel_player_close(player_id)
         self.logger.debug("Unregistering kiosk player %s", player_id)
         unregister_event = asyncio.Event()
         self._pending_unregisters[player_id] = unregister_event

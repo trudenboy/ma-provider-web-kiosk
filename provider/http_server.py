@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from aiohttp import WSMsgType, web
+from aiohttp import ClientError, WSMsgType, web
 from music_assistant_models.enums import PlaybackState
 
 from music_assistant.constants import SENDSPIN_SERVER_PORT
@@ -20,9 +20,10 @@ from .constants import (
     DEFAULT_SHOW_STOP_NOTIFICATION,
     PLAYER_ID_SANITIZE_RE,
     WEB_KIOSK_PLAYER_ID_PREFIX,
+    normalize_sendspin_client_id,
 )
 from .party import PartyAdapter
-from .player import WebKioskPlayer
+from .player import WebKioskPlayer, media_timeline
 
 if TYPE_CHECKING:
     from .provider import WebKioskProvider
@@ -107,7 +108,9 @@ class WebKioskHTTPServer:
         title: str | None = None,
         artist: str | None = None,
         image_url: str | None = None,
-        duration: int | None = None,
+        duration: float | None = None,
+        start: float = 0,
+        wave_seq: int | None = None,
     ) -> None:
         """Notify subscribed WebSocket clients to start playback with metadata."""
         clients = self._ws_clients.get(player_id, set())
@@ -128,7 +131,32 @@ class WebKioskHTTPServer:
             payload["image_url"] = image_url
         if duration is not None:
             payload["duration"] = duration
+        # Where audio.currentTime 0 sits in the song. Non-zero after a seek,
+        # because the stream Music Assistant serves then starts at that point.
+        payload["start"] = start
+        if wave_seq is not None:
+            payload["wave_seq"] = wave_seq
         msg = json.dumps(payload)
+        for ws in list(clients):
+            if not ws.closed:
+                self.provider.mass.create_task(self._ws_send(ws, msg, player_id))
+
+    def broadcast_wave(self, player_id: str, seq: int, bins: list[float] | None) -> None:
+        """Send the stored energy curve for the track that just started."""
+        clients = self._ws_clients.get(player_id, set())
+        if not clients:
+            return
+        msg = json.dumps({"type": "wave", "seq": seq, "bins": bins or []})
+        for ws in list(clients):
+            if not ws.closed:
+                self.provider.mass.create_task(self._ws_send(ws, msg, player_id))
+
+    def broadcast_lyrics(self, player_id: str, seq: int, lines: list[dict[str, Any]]) -> None:
+        """Send lyric lines for the track that just started."""
+        clients = self._ws_clients.get(player_id, set())
+        if not clients:
+            return
+        msg = json.dumps({"type": "lyrics", "seq": seq, "lines": lines})
         for ws in list(clients):
             if not ws.closed:
                 self.provider.mass.create_task(self._ws_send(ws, msg, player_id))
@@ -209,8 +237,13 @@ class WebKioskHTTPServer:
         self.app.router.add_get("/ws", self._handle_ws)
         self.app.router.add_get("/stream/{player_id}", self._handle_stream)
         self.app.router.add_get("/stream/{player_id}.mp3", self._handle_stream)
+        self.app.router.add_get("/api/party", self._handle_party_info)
         self.app.router.add_get("/api/party/qr.svg", self._handle_party_qr)
         self.app.router.add_get("/api/party/qr.png", self._handle_party_qr)
+        # Same-origin stand-in for the MA webserver. The SPA is on this port and
+        # the MA API is on another, so a browser will not call MA directly.
+        self.app.router.add_post("/api", self._handle_ma_api)
+        self.app.router.add_get("/imageproxy/{image_id:.*}", self._handle_imageproxy)
 
     @web.middleware
     async def _cors_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:
@@ -234,6 +267,8 @@ class WebKioskHTTPServer:
         response: web.StreamResponse = await handler(request)
         if not _is_audio_path(request.path):
             response.headers["Access-Control-Allow-Origin"] = "*"
+        if request.path == "/web" or request.path.startswith("/web/"):
+            response.headers["Cache-Control"] = "no-cache"
         return response
 
     async def _handle_root(self, request: web.Request) -> web.Response:
@@ -292,7 +327,7 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
 <button class="btn" id="copy">Copy</button>
 <button class="btn" id="open" style="background:#2f6f3f;border-color:#2f6f3f">Open</button>
 </div>
-<small>The Sendspin server is assumed at {html_escape(sendspin_url)}.</small>
+<small>Choose music in Music Assistant. This page only plays it. Transport and queue commands need an auth token. The party code is shown when guest access is on. The Sendspin server is assumed at {html_escape(sendspin_url)}.</small>
 </div>
 
 <div class="info">
@@ -369,9 +404,15 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         await ws.prepare(request)
 
         player_id, _, player = await self._ensure_player_for_request(request)
+        # Count this socket before any await. A reload's old socket can close
+        # during that await, and it must still see a live client.
         if player_id not in self._ws_clients:
             self._ws_clients[player_id] = set()
         self._ws_clients[player_id].add(ws)
+        self.provider.cancel_player_close(player_id)
+        announced = normalize_sendspin_client_id(request.query.get("sendspin_client_id"))
+        if player is not None and announced:
+            await self.provider.note_sendspin_client_id(player, announced)
         logger.info(
             "WebSocket connected: player_id=%s, clients_for_player=%d",
             player_id,
@@ -397,9 +438,15 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
                 offline_player = self.provider.mass.players.get_player(player_id)
                 if offline_player and isinstance(offline_player, WebKioskPlayer):
                     offline_player.on_ws_disconnected()
+                # Gone for good only if nothing reconnects. A reload does.
+                self.provider.schedule_player_close(player_id)
             logger.debug("WebSocket client disconnected for player %s", player_id)
 
         return ws
+
+    def client_count(self, player_id: str) -> int:
+        """Return how many browser sockets are open for this player."""
+        return len(self._ws_clients.get(player_id, ()))
 
     async def _send_snapshot(
         self, ws: web.WebSocketResponse, player: WebKioskPlayer | None
@@ -411,6 +458,8 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         play_path = (
             f"/stream/{player.player_id}?token={self.provider.get_stream_token(player.player_id)}"
         )
+        song_length, stream_start = media_timeline(media)
+        wave_seq = self.provider.next_wave_seq(player.player_id)
         payload: dict[str, Any] = {
             "type": "play",
             "path": play_path,
@@ -418,14 +467,27 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
             "title": media.title,
             "artist": media.artist,
             "image_url": media.image_url,
-            "duration": media.stream_duration or media.duration,
+            "duration": song_length,
+            "start": stream_start,
+            "wave_seq": wave_seq,
         }
         await self._ws_send(ws, json.dumps(payload))
-        if player.playback_state == PlaybackState.PAUSED:
-            await self._ws_send(ws, json.dumps({"type": "pause"}))
-        elif player.playback_state == PlaybackState.PLAYING and player.elapsed_time is not None:
+        self.provider.spawn_wave(player.player_id, wave_seq)
+        self.provider.spawn_lyrics(player.player_id, wave_seq)
+        # Position inside the served audio, including while paused. The song
+        # clock on screen is start + this value. A paused reconnect used to
+        # skip it and open the track at 0:00.
+        if player.elapsed_time is not None:
             await self._ws_send(
                 ws, json.dumps({"type": "seek", "position": int(player.elapsed_time)})
+            )
+        if player.playback_state == PlaybackState.PAUSED:
+            await self._ws_send(ws, json.dumps({"type": "pause"}))
+        # The slider starts at 100. Send the real level so a reconnect does
+        # not jump the volume on the first drag.
+        if player.volume_level is not None:
+            await self._ws_send(
+                ws, json.dumps({"type": "volume", "level": int(player.volume_level)})
             )
 
     async def _handle_stream(self, request: web.Request) -> web.StreamResponse:
@@ -448,9 +510,78 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
             return web.Response(status=502, text="Unable to resolve stream URL")
         raise web.HTTPFound(location=rewrite_stream_host(request, stream_url))
 
+    async def _handle_party_info(self, request: web.Request) -> web.Response:
+        """Return the active party caption. The join URL stays inside the QR image."""
+        party = await self.party.get_active_party()
+        if party is None:
+            return web.json_response({"active": False})
+        return web.json_response(
+            {
+                "active": True,
+                "name": party.name,
+                "qr_text": party.qr_text,
+                "version": party.qr_version,
+            }
+        )
+
     async def _handle_party_qr(self, request: web.Request) -> web.Response:
         """Serve the guest join URL as a QR code image (SVG or PNG by route)."""
         return await self.party.handle_qr(request)
+
+    async def _handle_ma_api(self, request: web.Request) -> web.Response:
+        """Forward a JSON-RPC call to the Music Assistant webserver on this host."""
+        base = self._ma_internal_base()
+        if not base:
+            return web.Response(status=503, text="Music Assistant API is unavailable")
+        return await self._forward_to_mass(request, "POST", f"{base}/api", await request.read())
+
+    async def _handle_imageproxy(self, request: web.Request) -> web.Response:
+        """Forward a cover-art request to the Music Assistant image proxy."""
+        base = self._ma_internal_base()
+        if not base:
+            return web.Response(status=503, text="Music Assistant API is unavailable")
+        path = request.path
+        if not path.startswith("/imageproxy/") or ".." in path:
+            return web.Response(status=400, text="Invalid image path")
+        url = f"{base}{path}"
+        if request.query_string:
+            url = f"{url}?{request.query_string}"
+        return await self._forward_to_mass(request, "GET", url, None)
+
+    def _ma_internal_base(self) -> str | None:
+        """Return a URL this process can use to reach the MA webserver."""
+        webserver = getattr(self.provider.mass, "webserver", None)
+        if webserver is None:
+            return None
+        for attr in ("internal_base_url", "base_url"):
+            value = getattr(webserver, attr, None)
+            if isinstance(value, str) and value.startswith("http"):
+                return value.rstrip("/")
+        return None
+
+    async def _forward_to_mass(
+        self, request: web.Request, method: str, url: str, body: bytes | None
+    ) -> web.Response:
+        """Perform one request against the local MA webserver and return its body."""
+        headers: dict[str, str] = {}
+        if auth := request.headers.get("Authorization"):
+            headers["Authorization"] = auth
+        if method == "POST":
+            headers["Content-Type"] = request.headers.get("Content-Type", "application/json")
+        try:
+            async with self.provider.mass.http_session.request(
+                method, url, data=body, headers=headers, allow_redirects=False
+            ) as resp:
+                payload = await resp.read()
+                response_headers: dict[str, str] = {}
+                if content_type := resp.headers.get("Content-Type"):
+                    response_headers["Content-Type"] = content_type
+                if location := resp.headers.get("Location"):
+                    response_headers["Location"] = location
+                return web.Response(status=resp.status, body=payload, headers=response_headers)
+        except (ClientError, TimeoutError, OSError):
+            logger.exception("Music Assistant proxy failed for %s", url.split("?", 1)[0])
+            return web.Response(status=502, text="Music Assistant is unreachable")
 
     async def _ws_send(
         self, ws: web.WebSocketResponse, text: str, player_id: str | None = None
@@ -490,6 +621,9 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
             ):
                 player.note_seek(float(position))
                 self.provider.on_player_activity(player_id)
+        elif msg_type == "ended":
+            self.provider.track_ended(player_id)
+            self.provider.on_player_activity(player_id)
         else:
             logger.debug("Unknown WS message type from %s: %s", player_id, msg_type)
 

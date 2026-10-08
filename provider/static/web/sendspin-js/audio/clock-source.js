@@ -6,6 +6,14 @@
  * - "timestamp": AudioContext.getOutputTimestamp() with extensive validation
  *
  * Promotes to "timestamp" after enough good samples, demotes on failures.
+ *
+ * Both sources report the same quantity: the *render* clock, in the
+ * `AudioContext.currentTime` domain that `source.start()` accepts.
+ * `getOutputTimestamp().contextTime` is the playout clock instead (the frame
+ * leaving the output port), which trails the render clock by
+ * baseLatency + outputLatency, so callers pass that latency in and it is added
+ * back. Without it the two sources would disagree by one output latency and
+ * playback would audibly step whenever the source is promoted or demoted.
  */
 const OUTPUT_TIMESTAMP_MAX_FRESHNESS_MS = 250;
 const OUTPUT_TIMESTAMP_MIN_SAMPLE_INTERVAL_MS = 40;
@@ -123,7 +131,7 @@ export class ClockSource {
         }
         return this.estimateAudioTimeSec ?? rawTimeSec;
     }
-    getTimestampDerivedTime(rawTimeSec, audioContext) {
+    getTimestampDerivedTime(rawTimeSec, audioContext, playoutLatencySec) {
         // On Cast receivers, stay on the estimated clock to avoid rate oscillations.
         if (this._timestampPromotionDisabled) {
             if (this.activeSource !== "estimated" ||
@@ -150,7 +158,9 @@ export class ClockSource {
                 return null;
             }
             const freshnessMs = Math.max(0, rawFreshnessMs);
-            const predictedAudioTimeSec = ts.contextTime + freshnessMs / 1000;
+            // contextTime is the playout clock; lift it into the render-clock domain
+            // so it is directly comparable to (and interchangeable with) currentTime.
+            const predictedAudioTimeSec = ts.contextTime + freshnessMs / 1000 + playoutLatencySec;
             const sample = {
                 contextTimeSec: ts.contextTime,
                 performanceTimeMs: ts.performanceTime,
@@ -224,8 +234,16 @@ export class ClockSource {
             return null;
         }
     }
-    /** Get a timing snapshot with both derived and raw AudioContext times. */
-    getTimingSnapshot(audioContext) {
+    /**
+     * Get a timing snapshot with both derived and raw AudioContext times.
+     *
+     * @param playoutLatencySec Measured baseLatency + outputLatency, used to
+     *   normalize the getOutputTimestamp-derived clock into the render-clock
+     *   domain. Pass the measured value regardless of whether latency
+     *   compensation is enabled: this only keeps the two clock sources in one
+     *   domain, it does not compensate playback.
+     */
+    getTimingSnapshot(audioContext, playoutLatencySec = 0) {
         const nowMs = performance.now();
         const nowUs = nowMs * 1000;
         if (!audioContext) {
@@ -238,7 +256,7 @@ export class ClockSource {
         }
         const rawTimeSec = audioContext.currentTime;
         const estimatedTimeSec = this.getEstimatedTime(rawTimeSec, nowMs);
-        const timestampTimeSec = this.getTimestampDerivedTime(rawTimeSec, audioContext);
+        const timestampTimeSec = this.getTimestampDerivedTime(rawTimeSec, audioContext, playoutLatencySec);
         let derivedTimeSec = this.activeSource === "timestamp" && timestampTimeSec !== null
             ? timestampTimeSec
             : estimatedTimeSec;

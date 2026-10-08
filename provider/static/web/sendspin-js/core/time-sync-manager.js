@@ -3,8 +3,8 @@ const TIME_SYNC_BURST_INTERVAL_MS = 10000;
 const TIME_SYNC_REQUEST_TIMEOUT_MS = 2000;
 const TIME_SYNC_ROBUST_SELECTION_COUNT = 3;
 export class TimeSyncManager {
-    constructor(wsManager, stateManager, timeFilter) {
-        this.wsManager = wsManager;
+    constructor(sender, stateManager, timeFilter) {
+        this.sender = sender;
         this.stateManager = stateManager;
         this.timeFilter = timeFilter;
         this.timeSyncBurstActive = false;
@@ -28,7 +28,7 @@ export class TimeSyncManager {
         this.stateManager.setTimeSyncInterval(timeSyncTimeout);
     }
     startTimeSyncBurstIfIdle() {
-        if (this.timeSyncBurstActive || !this.wsManager.isConnected()) {
+        if (this.timeSyncBurstActive) {
             return;
         }
         this.timeSyncBurstActive = true;
@@ -39,8 +39,7 @@ export class TimeSyncManager {
     }
     sendNextTimeSyncBurstProbe() {
         if (!this.timeSyncBurstActive ||
-            this.timeSyncInFlightClientTransmitted !== null ||
-            !this.wsManager.isConnected()) {
+            this.timeSyncInFlightClientTransmitted !== null) {
             return;
         }
         if (this.timeSyncBurstSentCount >= TIME_SYNC_BURST_SIZE) {
@@ -147,7 +146,7 @@ export class TimeSyncManager {
                 client_transmitted: clientTimeUs,
             },
         };
-        this.wsManager.send(message);
+        this.sender.sendControl(message);
         return clientTimeUs;
     }
 }

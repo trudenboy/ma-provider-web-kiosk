@@ -13,15 +13,26 @@ import { WebSocketManager } from "./websocket-manager.js";
 import { SendspinTimeFilter } from "./time-filter.js";
 import { StaticDelayStore } from "./static-delay-store.js";
 import { clampSyncDelayMs } from "../sync-delay.js";
-function generateRandomId() {
-    return Math.random().toString(36).substring(2, 6);
-}
+import { Identity } from "./noise/identity.js";
+import { PskStore } from "./noise/psk.js";
+import { SendspinTransport } from "./transport.js";
+import { SUITES } from "./noise/suites.js";
+import { PairingManager } from "./pairing.js";
+import { getSupportedFormats } from "./codec-support.js";
+import { base64urlEncode, base64urlDecode } from "./noise/base64url.js";
+import { encodePairingToken } from "./noise/pairing-token.js";
 export class SendspinCore {
     constructor(config) {
-        const randomId = generateRandomId();
-        const playerId = config.playerId ?? `sendspin-js-${randomId}`;
-        const clientName = config.clientName ?? `Sendspin JS Client (${randomId})`;
-        this.config = { ...config, playerId, clientName };
+        this.handshakeInfo = null;
+        // Validate configured codecs up front so a set with no browser overlap
+        // throws to the app instead of failing silently inside client/hello dispatch.
+        if (config.codecs)
+            getSupportedFormats(config.codecs);
+        this.hasStorage = (config.storage ?? null) !== null;
+        this.identity = Identity.loadOrCreate(config.storage ?? null);
+        const clientName = config.clientName ??
+            `Sendspin JS Client (${this.identity.clientId.slice(0, 6)})`;
+        this.config = { ...config, clientName };
         // Initial delay precedence: explicit config, then persisted, then default.
         this.delayStore = new StaticDelayStore(config.storage ?? null);
         const persisted = this.delayStore.load();
@@ -31,9 +42,55 @@ export class SendspinCore {
         this.stateManager = new StateManager(config.onStateChange);
         this.decoder = new SendspinDecoder((chunk) => this._onAudioData?.(chunk), () => this.stateManager.streamGeneration);
         this.wsManager = new WebSocketManager(config.reconnect);
-        this.protocolHandler = new ProtocolHandler(playerId, this.wsManager, this, // this class implements StreamHandler
+        this.pskStore = new PskStore(config.storage ?? null);
+        for (const r of config.longTermPsks ?? []) {
+            this.pskStore.addLongTerm(base64urlDecode(r.psk), r.serverId);
+        }
+        // Standing candidate: a server may re-handshake to it before the app reads pairingPsk.
+        if (this.hasStorage)
+            this.pskStore.getOrCreatePairingPsk();
+        this.transport = new SendspinTransport(this.wsManager, {
+            identity: this.identity,
+            pskStore: this.pskStore,
+            suiteId: config.suite ?? "chacha",
+            unpairedAccess: config.unpairedAccess ?? true,
+        }, {
+            onHandshakeComplete: (info) => {
+                const isRehandshake = this.handshakeInfo !== null;
+                this.handshakeInfo = info;
+                // Drop any pending pairing PSK a re-handshake would otherwise strand.
+                this.pairing.reset();
+                this.protocolHandler.resetActivation(isRehandshake);
+            },
+            onControlMessage: (msg) => this.routeControl(msg),
+            onBinaryMessage: (bytes) => this.handleBinaryMessage(bytes.buffer),
+        });
+        this.pairing = new PairingManager({
+            sendControl: (m) => this.transport.sendControl(m),
+            close: () => this.transport.close(),
+            pskStore: this.pskStore,
+            serverId: () => this.handshakeInfo?.serverId ?? "",
+            matchedCategory: () => this.handshakeInfo?.category ?? "sentinel",
+            handshakeHash: () => this.transport.handshakeHash,
+            aeadSeal: (key, plaintext) => SUITES[config.suite ?? "chacha"].aeadEncrypt(key, 0n, new Uint8Array(0), plaintext),
+            storage: config.storage ?? null,
+            onPin: config.onPairingPin ?? null,
+            pinOutChannels: config.pinOutChannels,
+            minPinLength: config.minPinLength,
+            staticPin: config.staticPin,
+            staticPinLocations: config.staticPinLocations,
+            pairingPskLocations: config.pairingPskLocations,
+            onEvent: (e, d) => this.config.onPairing?.(e, d),
+        });
+        const helloContext = {
+            trustLevel: () => this.handshakeInfo?.trustLevel ?? "none",
+            pairMethods: () => (this.hasStorage ? this.pairing.descriptors() : []),
+            unpairedAccess: config.unpairedAccess ?? true,
+        };
+        this.protocolHandler = new ProtocolHandler(this.transport, helloContext, this, // this class implements StreamHandler
         this.stateManager, this.timeFilter, {
             clientName,
+            productName: config.productName,
             codecs: config.codecs,
             bufferCapacity: config.bufferCapacity,
             requiredLeadTimeMs: config.requiredLeadTimeMs,
@@ -43,6 +100,50 @@ export class SendspinCore {
             onDelayCommand: config.onDelayCommand,
             getExternalVolume: config.getExternalVolume,
         });
+    }
+    // Route decrypted control messages from the transport. Pairing consumes its
+    // own activate/finalize/abort; everything else goes to the protocol handler.
+    routeControl(msg) {
+        if (msg.type === "server/activate") {
+            const p = (msg.payload ?? {});
+            if (p.activities?.includes("pairing")) {
+                this.protocolHandler.suspendForPairing();
+            }
+            const consumed = this.pairing.onActivate(p.activities ?? [], p.pairing);
+            if (!consumed)
+                this.protocolHandler.handleServerMessage(msg);
+            return;
+        }
+        if (msg.type === "server/pair-init") {
+            return this.pairing.onPairInit((msg.payload ?? {}));
+        }
+        if (msg.type === "server/pair-auth") {
+            return this.pairing.onPairAuth((msg.payload ?? {}));
+        }
+        if (msg.type === "server/pair-confirm") {
+            return this.pairing.onPairConfirm((msg.payload ?? {}));
+        }
+        if (msg.type === "server/pair-finalize")
+            return this.pairing.onPairFinalize();
+        if (msg.type === "pair/abort") {
+            return this.pairing.onAbort((msg.payload ?? {}).reason ?? "");
+        }
+        this.protocolHandler.handleServerMessage(msg);
+    }
+    onTransportClose() {
+        // Drop the transport's handshake timer and stale session so a reconnect
+        // starts clean and a synchronous send from onConnectionOpen can't emit a
+        // frame under the dead session's keys.
+        this.transport.onSocketClosed();
+        this.handshakeInfo = null;
+        this.protocolHandler.stopTimeSync();
+        this.protocolHandler.resetActivation();
+        this.pairing.reset();
+        // Stop periodic state-update sends so they don't spam
+        // "WebSocket not connected" warnings after the transport is gone.
+        this.stateManager.clearStateUpdateInterval();
+        console.log("Sendspin: Connection closed");
+        this._onConnectionClose?.();
     }
     // ========================================
     // StreamHandler implementation
@@ -118,23 +219,15 @@ export class SendspinCore {
     async connect() {
         const onOpen = () => {
             this._onConnectionOpen?.();
-            console.log("Sendspin: Using player_id:", this.config.playerId);
-            this.protocolHandler.sendClientHello();
+            this.transport.start();
         };
         const onMessage = (event) => {
-            this.protocolHandler.handleMessage(event);
+            this.transport.handleRaw(event);
         };
         const onError = (error) => {
             console.error("Sendspin: WebSocket error", error);
         };
-        const onClose = () => {
-            this.protocolHandler.stopTimeSync();
-            // Stop periodic state-update sends so they don't spam
-            // "WebSocket not connected" warnings after the transport is gone.
-            this.stateManager.clearStateUpdateInterval();
-            console.log("Sendspin: Connection closed");
-            this._onConnectionClose?.();
-        };
+        const onClose = () => this.onTransportClose();
         if (this.config.webSocket) {
             // Adopt externally-managed WebSocket
             await this.wsManager.adopt(this.config.webSocket, onOpen, onMessage, onError, onClose);
@@ -164,7 +257,7 @@ export class SendspinCore {
         this.stateManager.currentStreamFormat = null;
     }
     disconnect(reason = "restart") {
-        if (this.wsManager.isConnected()) {
+        if (this.transport.ready) {
             this.protocolHandler.sendGoodbye(reason);
         }
         this.protocolHandler.stopTimeSync();
@@ -234,6 +327,44 @@ export class SendspinCore {
     }
     get isConnected() {
         return this.wsManager.isConnected();
+    }
+    // ========================================
+    // Identity / pairing
+    // ========================================
+    get clientId() {
+        return this.identity.clientId;
+    }
+    /** The client's Pairing PSK (base64url), for the operator to enter into the server. Null without storage. */
+    get pairingPsk() {
+        return this.hasStorage
+            ? base64urlEncode(this.pskStore.getOrCreatePairingPsk())
+            : null;
+    }
+    get pairingToken() {
+        const pairingPsk = this.pairingPsk;
+        return pairingPsk ? encodePairingToken(this.clientId, pairingPsk) : null;
+    }
+    rotatePairingPsk() {
+        if (!this.hasStorage)
+            return null;
+        this.pskStore.rotatePairingPsk();
+        return this.pairingPsk;
+    }
+    /**
+     * Operator gesture that opens the pairing window (~5 minutes, admits one
+     * attempt). Required before each gesture-gated attempt: every static PIN
+     * attempt, and dynamic PIN when escalated or the PIN is shorter than 6.
+     */
+    openPairingWindow() {
+        this.pairing.openPairingWindow();
+    }
+    /** Cancel an in-progress pairing attempt (sends pair/abort user_cancelled). */
+    cancelPairing() {
+        this.pairing.cancelPairing();
+    }
+    /** Whether dynamic PIN has escalated to gesture-gating (10 failures). */
+    isDynamicPinEscalated() {
+        return this.pairing.isDynamicPinEscalated();
     }
     get timeSyncInfo() {
         return {

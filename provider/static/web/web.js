@@ -1,10 +1,11 @@
-/* Web Kiosk frontend — drives Music Assistant through its native JSON-RPC + WS API. */
+/* Web Kiosk player. Music is chosen in Music Assistant. This page shows it. */
 (function () {
     'use strict';
 
     var params = new URLSearchParams(location.search);
-    var KIOSK = params.get('kiosk') === '1';
-    var SENDSPIN = KIOSK && params.get('sendspin') === '1';
+    // /web is the player. kiosk=1 remains so older links still open this screen.
+    var SENDSPIN = params.get('sendspin') === '1';
+    if (SENDSPIN) document.documentElement.classList.add('sendspin');
     var FLAG = function (name) { return params.get(name) !== '0'; };
     var SHOW = { controls: FLAG('controls'), party: FLAG('party'), viz: FLAG('viz'), lyrics: FLAG('lyrics') };
 
@@ -14,6 +15,10 @@
     };
     var deviceId = params.get('device_id') || LS.get('wk_device_id');
     if (!deviceId) { deviceId = 'wk-' + crypto.randomUUID(); LS.set('wk_device_id', deviceId); }
+    var sendspinClientId = '';
+    var sendspinModule = null;
+    // True only while the Sendspin server is actually streaming audio here.
+    var sendspinStreaming = false;
     var MA_URL = (params.get('ma_url') || LS.get('wk_ma_url') || '').replace(/\/$/, '');
     var TOKEN = params.get('token') || LS.get('wk_token') || '';
     if (MA_URL) LS.set('wk_ma_url', MA_URL);
@@ -23,20 +28,35 @@
     var ws = null;
     var msgSeq = 0;
     var playing = false;
-    var current = { title: '—', artist: '—', image: '', duration: 0, uri: '', itemId: '' };
+    var current = { title: '—', artist: '—', image: '', duration: 0, start: 0 };
+    // Seconds into the served file, applied once the audio element has metadata.
+    var pendingSeek = null;
+    // Song position shown while a seek waits for the rebuilt stream.
+    var displayHold = null;
+    var seekPointer = false;
+    var volumeTimer = null;
     var queue = [];
     var queueIndex = -1;
     var lyricsLines = [];
     var lyricsIdx = -1;
-    var navStack = [];
+    var endReported = false;
 
     var audio = new Audio();
     audio.volume = 1;
+    // Browsers withhold sound until the document receives a tap or a key.
+    // That one gesture covers later tracks. A reload asks again.
+    var AUDIO_PROMPT = 'Tap or press a key to start audio';
+    var audioPromptOn = false;
+    var htmlUnlocked = false;
+    var sendspinUnlocked = !SENDSPIN;
+    var audioArmed = false;
+    var silentUrl = '';
 
-    // --- JSON-RPC client ---
     async function rpc(command, args) {
-        if (!MA_URL || !TOKEN) throw new Error('Configure ma_url + token');
-        var res = await fetch(MA_URL + '/api', {
+        // Same origin as this page. The kiosk server forwards the call to MA,
+        // because the browser will not call MA's port from this one.
+        if (!TOKEN) throw new Error('Configure token');
+        var res = await fetch('/api', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
             body: JSON.stringify({ command: command, args: args || {}, message_id: String(++msgSeq) })
@@ -45,19 +65,42 @@
         return res.json();
     }
 
-    function setStatus(t) { document.getElementById('status').textContent = t || ''; }
+    function setStatus(t) {
+        if (!t && audioPromptOn) t = AUDIO_PROMPT;
+        var el = document.getElementById('kiosk-status');
+        el.textContent = t || '';
+        el.classList.toggle('hidden', !t);
+        el.classList.toggle('audio-prompt', el.textContent === AUDIO_PROMPT);
+    }
     function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
     function fmt(sec) {
         sec = Math.max(0, Math.floor(sec || 0));
         var m = Math.floor(sec / 60), s = sec % 60;
         return m + ':' + (s < 10 ? '0' : '') + s;
     }
+    function songTime() {
+        if (displayHold != null) return displayHold;
+        return (current.start || 0) + (audio.currentTime || 0);
+    }
     function imageUrl(item) {
-        var img = item && (item.image || item.image_path || item.thumb);
-        if (typeof img !== 'string' || !img) return '';
-        if (img.indexOf('http') === 0) return img;
-        if (img.indexOf('/') === 0) return MA_URL + img;
-        return MA_URL + '/imageproxy/' + img;
+        var img = '';
+        if (item) {
+            if (typeof item.image === 'string') img = item.image;
+            else if (typeof item.image_path === 'string') img = item.image_path;
+            else if (typeof item.thumb === 'string') img = item.thumb;
+            // Covers arrive as metadata.images[].proxy_id. The kiosk serves
+            // that id on the same origin as this page.
+            if (!img && item.metadata && Array.isArray(item.metadata.images) && item.metadata.images[0]) {
+                var first = item.metadata.images[0];
+                if (typeof first.proxy_id === 'string' && first.proxy_id) return '/imageproxy/' + first.proxy_id;
+                if (typeof first.path === 'string') img = first.path;
+            }
+        }
+        if (!img) return '';
+        var proxyAt = img.indexOf('/imageproxy/');
+        if (proxyAt >= 0) return img.slice(proxyAt);
+        if (img.indexOf('http') === 0 || img.indexOf('/') === 0) return img;
+        return '/imageproxy/' + img;
     }
     function artistStr(item) {
         if (!item) return '';
@@ -68,53 +111,119 @@
         if (item.artist && typeof item.artist === 'string') return item.artist;
         return '';
     }
-    function itemType(item) {
-        return item && (item.media_type || item.type || '');
+    function streamUrl(path) {
+        // The stream path stays the same after a seek. A cache buster makes
+        // the browser fetch the new remainder instead of the previous file.
+        return path + (path.indexOf('?') >= 0 ? '&' : '?') + 'r=' + Date.now();
     }
 
-    // --- Web Kiosk WebSocket (registration + push + position) ---
     function connectWS() {
         var proto = location.protocol === 'https:' ? 'wss' : 'ws';
-        ws = new WebSocket(proto + '://' + location.host + '/ws?device_id=' + encodeURIComponent(deviceId));
+        var qs = 'device_id=' + encodeURIComponent(deviceId);
+        if (sendspinClientId) qs += '&sendspin_client_id=' + encodeURIComponent(sendspinClientId);
+        ws = new WebSocket(proto + '://' + location.host + '/ws?' + qs);
         ws.onmessage = function (ev) { handleWS(JSON.parse(ev.data)); };
         ws.onclose = function () { ws = null; setTimeout(connectWS, 2000); };
         ws.onerror = function () { try { ws.close(); } catch (e) { /* noop */ } };
     }
     function sendWS(obj) { if (ws && ws.readyState === WebSocket.OPEN) { try { ws.send(JSON.stringify(obj)); } catch (e) { /* noop */ } } }
+    function reportTrackEnded() {
+        if (endReported || isPrimeSource() || sendspinStreaming) return;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        sendWS({ type: 'ended' });
+        endReported = true;
+    }
+
+    function applyPendingSeek() {
+        if (pendingSeek == null || audio.readyState < 1) return;
+        var target = pendingSeek;
+        var limit = Number.isFinite(audio.duration) ? audio.duration : target;
+        try {
+            audio.currentTime = Math.min(Math.max(0, target), Math.max(0, limit));
+        } catch (e) {
+            return;
+        }
+        pendingSeek = null;
+        paintClock();
+    }
 
     function handleWS(msg) {
         switch (msg.type) {
             case 'welcome':
                 playerId = msg.player_id;
                 setStatus('');
+                if (TOKEN) { fetchQueue(); fetchParty(); }
+                if (SENDSPIN) initSendspin();
+                if (audio.ended) reportTrackEnded();
                 break;
             case 'play':
+                endReported = false;
+                // A new track retires the previous curve. The matching wave
+                // message may already be waiting, or it arrives next.
+                if (typeof msg.wave_seq === 'number') takeServerWave(msg.wave_seq);
+                // Sendspin mode still receives the Web Kiosk stream. Music Assistant
+                // uses that output unless a Sendspin stream is already playing here.
+                if (sendspinStreaming) break;
                 if (msg.path) {
-                    setCurrent({ title: msg.title || '', artist: msg.artist || '', image: msg.image_url || '', duration: msg.duration || 0 });
-                    audio.src = msg.path;
-                    audio.play().catch(function () { /* autoplay blocked until interaction */ });
+                    pendingSeek = null;
+                    current = {
+                        title: msg.title || '',
+                        artist: msg.artist || '',
+                        image: msg.image_url || '',
+                        duration: msg.duration || 0,
+                        start: typeof msg.start === 'number' ? msg.start : 0
+                    };
+                    displayHold = null;
+                    renderNow();
+                    audio.src = streamUrl(msg.path);
+                    startPlayback();
                     playing = true; sync();
-                    fetchLyrics();
+                    fetchQueue();
                 }
                 break;
             case 'stop':
                 if (msg.showNotification && !confirm('Stop playback?')) break;
                 audio.pause(); audio.removeAttribute('src');
-                setCurrent({ title: '—', artist: '—', image: '', duration: 0 });
+                pendingSeek = null;
+                displayHold = null;
+                current = { title: '—', artist: '—', image: '', duration: 0, start: 0 };
+                lyricsLines = [];
+                lyricsIdx = -1;
+                pendingLyrics = null;
+                renderNow();
                 playing = false; sync();
                 break;
             case 'pause':
                 audio.pause(); playing = false; sync();
                 break;
             case 'resume':
-                audio.play().catch(function () { /* noop */ }); playing = true; sync();
+                if (!sendspinStreaming) startPlayback();
+                playing = true; sync();
                 break;
             case 'seek':
-                if (typeof msg.position === 'number') audio.currentTime = msg.position;
+                // Seconds into the file being served, not seconds into the song.
+                if (typeof msg.position === 'number') {
+                    pendingSeek = msg.position;
+                    applyPendingSeek();
+                }
                 break;
             case 'volume':
                 audio.volume = (msg.level || 0) / 100;
-                document.getElementById('volume').value = msg.level || 0;
+                document.getElementById('kiosk-volume').value = msg.level || 0;
+                break;
+            case 'wave':
+                if (typeof msg.seq === 'number' && msg.seq !== waveGen) {
+                    pendingWave = { gen: msg.seq, bins: msg.bins };
+                    break;
+                }
+                applyWaveBins(msg.bins);
+                break;
+            case 'lyrics':
+                if (typeof msg.seq === 'number' && msg.seq !== waveGen) {
+                    pendingLyrics = { gen: msg.seq, lines: msg.lines };
+                    break;
+                }
+                applyLyrics(msg.lines);
                 break;
             case 'sendspin':
                 if (msg.url) location.href = msg.url;
@@ -123,360 +232,680 @@
     }
 
     setInterval(function () {
-        if (playing && ws && ws.readyState === WebSocket.OPEN) {
+        if (playing && !sendspinStreaming && ws && ws.readyState === WebSocket.OPEN) {
+            // Seconds into the served file. Music Assistant adds the seek origin.
             sendWS({ type: 'position', position: audio.currentTime });
         }
     }, 5000);
 
-    // --- Browsing ---
-    var SECTIONS = [
-        { key: 'recent', label: 'Recently played', run: function () { return rpc('music/recently_played_items', { limit: 60 }).then(function (d) { return d || []; }); } },
-        { key: 'albums', label: 'Albums', run: function () { return rpc('music/albums/library_items', { limit: 60, offset: 0 }).then(list); } },
-        { key: 'artists', label: 'Artists', run: function () { return rpc('music/artists/library_items', { limit: 60, offset: 0 }).then(list); } },
-        { key: 'playlists', label: 'Playlists', run: function () { return rpc('music/playlists/library_items', { limit: 60, offset: 0 }).then(list); } },
-        { key: 'tracks', label: 'Tracks', run: function () { return rpc('music/tracks/library_items', { limit: 200, offset: 0 }).then(list); } }
-    ];
-    function list(d) { return (d && d.items) ? d.items : []; }
-
-    function buildMenu() {
-        var nav = document.getElementById('menu');
-        nav.innerHTML = '';
-        SECTIONS.forEach(function (s, i) {
-            var b = document.createElement('button');
-            b.textContent = s.label;
-            b.onclick = function () { loadSection(i); };
-            nav.appendChild(b);
-        });
-    }
-
-    function loadSection(idx) {
-        document.querySelectorAll('#menu button').forEach(function (b, i) { b.classList.toggle('active', i === idx); });
-        navStack = [];
-        renderCrumbs();
-        setStatus('Loading…');
-        SECTIONS[idx].run().then(function (items) { renderGrid(items); setStatus(''); })
-            .catch(function (e) { setStatus(e.message); });
-    }
-
-    function renderCrumbs() {
-        var el = document.getElementById('crumbs');
-        el.innerHTML = '';
-        el.style.display = navStack.length ? 'block' : 'none';
-        navStack.forEach(function (n, i) {
-            var b = document.createElement('button');
-            b.textContent = n.label + (i < navStack.length - 1 ? ' ›' : '');
-            b.onclick = function () {
-                navStack = navStack.slice(0, i + 1);
-                renderCrumbs();
-                if (n.tracks) renderTrackList(n.tracks, n.trackKind);
-                else renderGrid(n.items);
-            };
-            el.appendChild(b);
-        });
-    }
-
-    function renderGrid(items) {
-        var el = document.getElementById('content');
-        el.className = 'grid';
-        el.innerHTML = '';
-        if (!items || !items.length) { el.innerHTML = '<div class="empty">Nothing here yet</div>'; return; }
-        items.forEach(function (item) {
-            var card = document.createElement('div');
-            card.className = 'card';
-            var img = document.createElement('img');
-            img.src = imageUrl(item); img.alt = '';
-            var meta = document.createElement('div'); meta.className = 'meta';
-            var t = document.createElement('div'); t.className = 'title'; t.textContent = item.name || '';
-            var s = document.createElement('div'); s.className = 'sub'; s.textContent = artistStr(item) || '';
-            meta.appendChild(t); meta.appendChild(s);
-            card.appendChild(img); card.appendChild(meta);
-            card.onclick = function () { openItem(item); };
-            el.appendChild(card);
-        });
-    }
-
-    function renderTrackList(items, kind) {
-        var el = document.getElementById('content');
-        el.className = 'list';
-        el.innerHTML = '';
-        if (!items || !items.length) { el.innerHTML = '<div class="empty">No tracks</div>'; return; }
-        items.forEach(function (item) {
-            var row = document.createElement('div'); row.className = 'row';
-            var img = document.createElement('img'); img.src = imageUrl(item); img.alt = '';
-            var meta = document.createElement('div'); meta.className = 'meta';
-            var t = document.createElement('div'); t.className = 'title'; t.textContent = item.name || '';
-            var s = document.createElement('div'); s.className = 'sub'; s.textContent = artistStr(item) || '';
-            meta.appendChild(t); meta.appendChild(s);
-            var dur = document.createElement('div'); dur.className = 'dur'; dur.textContent = item.duration ? fmt(item.duration) : '';
-            row.appendChild(img); row.appendChild(meta); row.appendChild(dur);
-            row.onclick = function () { playUri(item.uri || item.item_id, kind === 'album' || kind === 'playlist' || kind === 'artist'); };
-            el.appendChild(row);
-        });
-    }
-
-    function openItem(item) {
-        var t = itemType(item);
-        var provider = item.provider || 'library';
-        if (t === 'album') {
-            setStatus('Loading…');
-            rpc('music/albums/album_tracks', { item_id: item.item_id, provider_instance_id_or_domain: provider })
-                .then(function (tracks) {
-                    navStack.push({ label: item.name, tracks: tracks, trackKind: 'album', items: null });
-                    renderCrumbs(); renderTrackList(tracks, 'album'); setStatus('');
-                }).catch(function (e) { setStatus(e.message); });
-        } else if (t === 'artist') {
-            setStatus('Loading…');
-            rpc('music/artists/artist_albums', { item_id: item.item_id, provider_instance_id_or_domain: provider })
-                .then(function (albums) {
-                    navStack.push({ label: item.name, tracks: null, items: albums });
-                    renderCrumbs(); renderGrid(albums); setStatus('');
-                }).catch(function (e) { setStatus(e.message); });
-        } else if (t === 'playlist') {
-            setStatus('Loading…');
-            rpc('music/playlists/playlist_tracks', { item_id: item.item_id, provider_instance_id_or_domain: provider })
-                .then(function (tracks) {
-                    navStack.push({ label: item.name, tracks: tracks, trackKind: 'playlist', items: null });
-                    renderCrumbs(); renderTrackList(tracks, 'playlist'); setStatus('');
-                }).catch(function (e) { setStatus(e.message); });
-        } else {
-            playUri(item.uri || item.item_id, false);
+    function silentWavUrl() {
+        if (silentUrl) return silentUrl;
+        var samples = 800;
+        var pcmBytes = samples * 2;
+        var buffer = new ArrayBuffer(44 + pcmBytes);
+        var view = new DataView(buffer);
+        function write(offset, text) {
+            for (var i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
         }
+        write(0, 'RIFF');
+        view.setUint32(4, 36 + pcmBytes, true);
+        write(8, 'WAVE');
+        write(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, 1, true);
+        view.setUint32(24, 8000, true);
+        view.setUint32(28, 16000, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        write(36, 'data');
+        view.setUint32(40, pcmBytes, true);
+        var bytes = new Uint8Array(buffer);
+        var binary = '';
+        for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        silentUrl = 'data:audio/wav;base64,' + btoa(binary);
+        return silentUrl;
     }
-
-    // --- Playback ---
-    function playUri(uri, isContainer) {
-        if (!playerId) { setStatus('Not connected yet'); return; }
-        setStatus('Playing…');
-        rpc('player_queues/play_media', { queue_id: playerId, media: uri })
-            .then(function () { setStatus(''); if (isContainer) setTimeout(fetchQueue, 800); })
-            .catch(function (e) { setStatus(e.message); });
+    function isPrimeSource() {
+        var src = audio.getAttribute('src') || '';
+        return !src || src.indexOf('data:audio/wav;base64,') === 0;
+    }
+    function showAudioPrompt() {
+        audioPromptOn = true;
+        setStatus(AUDIO_PROMPT);
+    }
+    function hideAudioPrompt() {
+        audioPromptOn = false;
+        var el = document.getElementById('kiosk-status');
+        if (el && el.textContent === AUDIO_PROMPT) setStatus('');
+    }
+    function markHtmlUnlocked() {
+        htmlUnlocked = true;
+        hideAudioPrompt();
+        maybeDisarmAudio();
+    }
+    function maybeDisarmAudio() {
+        if (!htmlUnlocked || !sendspinUnlocked) return;
+        document.removeEventListener('pointerdown', onAudioGesture, true);
+        document.removeEventListener('keydown', onAudioGesture, true);
+        audioArmed = false;
+    }
+    function onAudioGesture(ev) {
+        if (ev.type === 'keydown' && ev.repeat) return;
+        var needHtml = !htmlUnlocked;
+        var needSendspin = SENDSPIN && !sendspinUnlocked;
+        if (!needHtml && !needSendspin) {
+            maybeDisarmAudio();
+            return;
+        }
+        // Keep this turn synchronous: play() and AudioContext.resume() only
+        // count when they start inside the gesture.
+        if (ev.type === 'keydown') {
+            ev.stopPropagation();
+            if (ev.key === ' ') ev.preventDefault();
+        }
+        if (needSendspin && window.__sendspinPlayer) {
+            window.__sendspinPlayer.unlock().then(function () {
+                sendspinUnlocked = true;
+                maybeDisarmAudio();
+            }).catch(function () { /* the next gesture tries again */ });
+        }
+        if (!needHtml) return;
+        if (isPrimeSource()) {
+            if (!audio.getAttribute('src')) audio.src = silentWavUrl();
+            var primed = audio.play();
+            if (!primed || !primed.then) { markHtmlUnlocked(); return; }
+            primed.then(markHtmlUnlocked).catch(function () {});
+            return;
+        }
+        var started = audio.play();
+        if (!started || !started.then) { markHtmlUnlocked(); return; }
+        started.then(function () {
+            if (!sendspinStreaming) markHtmlUnlocked();
+        }).catch(function () {});
+    }
+    function armAudioUnlock() {
+        if (audioArmed) return;
+        audioArmed = true;
+        document.addEventListener('pointerdown', onAudioGesture, true);
+        document.addEventListener('keydown', onAudioGesture, true);
+    }
+    function prepareAudioUnlock() {
+        armAudioUnlock();
+        var probe = new Audio(silentWavUrl());
+        var attempt = probe.play();
+        if (!attempt || !attempt.then) return;
+        attempt.then(function () {
+            probe.pause();
+            probe.removeAttribute('src');
+            markHtmlUnlocked();
+        }).catch(function (err) {
+            if (!htmlUnlocked && err && err.name === 'NotAllowedError') showAudioPrompt();
+        });
+    }
+    function startPlayback() {
+        if (sendspinStreaming) return;
+        var attempt = audio.play();
+        if (!attempt || !attempt.then) { markHtmlUnlocked(); return; }
+        attempt.then(function () {
+            if (!sendspinStreaming) markHtmlUnlocked();
+        }).catch(function (err) {
+            var name = err && err.name;
+            if (name === 'AbortError') return;
+            if (name === 'NotAllowedError') {
+                armAudioUnlock();
+                showAudioPrompt();
+                return;
+            }
+            setStatus((err && err.message) || 'Playback failed');
+        });
     }
     function cmd(name, args) {
-        if (!playerId) return;
-        rpc(name, Object.assign({ player_id: playerId }, args || {})).catch(function (e) { setStatus(e.message); });
+        if (!playerId) {
+            setStatus('Not connected yet');
+            return Promise.reject(new Error('Not connected yet'));
+        }
+        return rpc(name, Object.assign({ player_id: playerId }, args || {})).catch(function (e) {
+            setStatus(e.message || String(e));
+            return Promise.reject(e);
+        });
     }
 
-    // --- Now playing ---
-    function setCurrent(c) { current = c; renderNow(); }
+    function clearImage(img) {
+        img.onload = null;
+        img.onerror = null;
+        img.removeAttribute('src');
+    }
     function renderNow() {
-        document.getElementById('art').src = current.image ? imageUrl({ image: current.image }) : '';
-        document.getElementById('now').querySelector('.t').textContent = current.title;
-        document.getElementById('now').querySelector('.a').textContent = current.artist;
-        document.getElementById('kiosk-art').src = current.image ? imageUrl({ image: current.image }) : '';
-        document.getElementById('kiosk-title').textContent = current.title;
-        document.getElementById('kiosk-artist').textContent = current.artist;
-        document.getElementById('kiosk-dur').textContent = current.duration ? fmt(current.duration) : '0:00';
+        var src = current.image ? imageUrl({ image: current.image }) : '';
+        var box = document.getElementById('kiosk-artbox');
+        var art = document.getElementById('kiosk-art');
         var bg = document.getElementById('kiosk-bg-img');
-        bg.src = current.image ? imageUrl({ image: current.image }) : '';
-        bg.style.opacity = current.image ? '1' : '0';
+        function showEmblem() {
+            box.classList.remove('has-art');
+            clearImage(art);
+            clearImage(bg);
+            bg.style.opacity = '0';
+        }
+        art.alt = current.title && current.title !== '—' ? current.title : '';
+        document.getElementById('kiosk-title').textContent = current.title || '—';
+        document.getElementById('kiosk-artist').textContent = current.artist || '—';
+        if (!src) {
+            showEmblem();
+            paintClock();
+            return;
+        }
+        // Keep the emblem up until the file decodes. An empty src paints a broken icon.
+        art.onload = function () {
+            if (art.getAttribute('src') !== src) return;
+            box.classList.add('has-art');
+            bg.style.opacity = '1';
+        };
+        art.onerror = function () {
+            if (art.getAttribute('src') !== src) return;
+            showEmblem();
+        };
+        bg.onerror = function () {
+            if (bg.getAttribute('src') !== src) return;
+            clearImage(bg);
+            bg.style.opacity = '0';
+        };
+        box.classList.remove('has-art');
+        art.src = src;
+        bg.src = src;
+        if (art.complete) {
+            if (art.naturalWidth > 0) {
+                box.classList.add('has-art');
+                bg.style.opacity = '1';
+            } else {
+                showEmblem();
+            }
+        }
+        paintClock();
+    }
+    function paintClock() {
+        var dur = current.duration || 0;
+        document.getElementById('kiosk-dur').textContent = dur ? fmt(dur) : '0:00';
+        if (seekPointer) return;
+        var t = songTime();
+        document.getElementById('kiosk-time').textContent = fmt(t);
+        if (dur) document.getElementById('kiosk-seek').value = String(Math.round((t / dur) * 1000));
     }
     function sync() {
-        document.getElementById('play').textContent = playing ? '⏸' : '▶';
-        document.getElementById('k-play').textContent = playing ? '⏸' : '▶';
-        if (playing) startViz(); else stopViz();
-    }
-
-    // --- Visualizer (decorative canvas) ---
-    var vizTimer = null;
-    function startViz() {
-        if (!SHOW.viz || vizTimer) return;
-        var cv = document.getElementById('kiosk-viz');
-        var ctx = cv.getContext('2d');
-        function size() { cv.width = innerWidth; cv.height = innerHeight; }
-        size(); window.addEventListener('resize', size);
-        var bars = 48;
-        vizTimer = setInterval(function () {
-            ctx.clearRect(0, 0, cv.width, cv.height);
-            var t = Date.now() / 1000;
-            for (var i = 0; i < bars; i++) {
-                var h = (0.3 + 0.7 * Math.abs(Math.sin(t * 1.4 + i * 0.4))) * cv.height * 0.35;
-                var w = cv.width / bars;
-                ctx.fillStyle = 'rgba(79,140,255,' + (0.25 + 0.5 * Math.abs(Math.sin(t + i * 0.2))) + ')';
-                ctx.fillRect(i * w, cv.height - h, w - 2, h);
-            }
-        }, 60);
-    }
-    function stopViz() {
-        if (vizTimer) { clearInterval(vizTimer); vizTimer = null; }
-        var cv = document.getElementById('kiosk-viz');
-        cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
-    }
-
-    // --- Lyrics (native API) ---
-    async function fetchLyrics() {
-        var el = document.getElementById('kiosk-lyrics');
-        if (!SHOW.lyrics || !playerId) { el.classList.add('hidden'); return; }
-        lyricsLines = []; lyricsIdx = -1;
-        try {
-            var q = await rpc('player_queues/get_active_queue', { player_id: playerId });
-            if (!q || !q.queue_id) { el.classList.add('hidden'); return; }
-            var items = await rpc('player_queues/items', { queue_id: q.queue_id, limit: 200 });
-            var idx = q.current_index != null ? q.current_index : 0;
-            var item = items[idx];
-            if (!item || !item.media_item) { el.classList.add('hidden'); return; }
-            var res = await rpc('metadata/get_track_lyrics', { track: item.media_item });
-            var lyrics = Array.isArray(res) ? res[0] : null;
-            var lrc = Array.isArray(res) ? res[1] : null;
-            lyricsLines = parseLyrics(lyrics, lrc);
-            if (!lyricsLines.length) { el.classList.add('hidden'); return; }
-            el.classList.remove('hidden');
-            el.innerHTML = lyricsLines.map(function (l) { return '<div class="l">' + esc(l.text) + '</div>'; }).join('');
-        } catch (e) { el.classList.add('hidden'); }
-    }
-    function parseLyrics(lyrics, lrc) {
-        if (lrc) {
-            return lrc.split('\n').map(function (line) {
-                var m = line.match(/\[(\d+):(\d+)(?:\.(\d+))?\]\s*(.*)/);
-                if (!m) return null;
-                var frac = m[3] ? parseInt(m[3], 10) / Math.pow(10, m[3].length) : 0;
-                return { t: (+m[1] * 60) + (+m[2]) + frac, text: m[4] };
-            }).filter(Boolean).sort(function (a, b) { return a.t - b.t; });
+        var playBtn = document.getElementById('k-play');
+        playBtn.textContent = playing ? '⏸' : '▶';
+        playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+        // Freeze the Sendspin clock at the pause so the bars stay on that moment.
+        if (sendspinStreaming && vizWasPlaying && !playing && waveAnchorAt) {
+            waveAnchor += (performance.now() - waveAnchorAt) / 1000;
+            waveAnchorAt = performance.now();
         }
-        if (lyrics) return lyrics.split('\n').filter(Boolean).map(function (l) { return { t: 0, text: l }; });
-        return [];
-    }
-    function highlightLyrics() {
-        var t = audio.currentTime;
-        var idx = -1;
-        for (var i = 0; i < lyricsLines.length; i++) { if (lyricsLines[i].t <= t) idx = i; else break; }
-        if (idx === lyricsIdx) return;
-        lyricsIdx = idx;
-        var nodes = document.querySelectorAll('#kiosk-lyrics .l');
-        nodes.forEach(function (n, i) { n.classList.toggle('active', i === idx); });
+        vizWasPlaying = playing;
+        syncViz();
     }
 
-    // --- Party (native status + provider QR) ---
+    // Stored RMS of the whole track, 1800 bins. The bars are a window of that
+    // curve around the playhead. A missing analysis leaves the canvas empty.
+    var VIZ_BARS = 48;
+    var wave = null;
+    var waveKey = '';
+    var waveReq = 0;
+    var wavePending = false;
+    var waveDuration = 0;
+    var waveAnchor = 0;
+    var waveAnchorAt = 0;
+    var vizSeekUntil = 0;
+    var vizFrame = 0;
+    var vizWasPlaying = false;
+    var waveGen = 0;
+    var pendingWave = null;
+    var pendingLyrics = null;
+
+    function applyWaveBins(bins) {
+        wavePending = false;
+        wave = Array.isArray(bins) && bins.length ? bins : null;
+        if (!vizFrame) paintViz();
+    }
+    function applyLyrics(lines) {
+        lyricsLines = Array.isArray(lines) ? lines : [];
+        lyricsIdx = -1;
+        paintLyrics();
+        // viz=0 still follows the lyric window while the track plays.
+        if (playing) syncViz();
+    }
+    function takeServerWave(seq) {
+        waveGen = seq;
+        if (pendingWave && pendingWave.gen === seq) {
+            var bins = pendingWave.bins;
+            pendingWave = null;
+            applyWaveBins(bins);
+        } else {
+            pendingWave = null;
+            wave = null;
+            wavePending = false;
+            waveKey = '';
+            if (!vizFrame) paintViz();
+        }
+        if (pendingLyrics && pendingLyrics.gen === seq) {
+            var lines = pendingLyrics.lines;
+            pendingLyrics = null;
+            applyLyrics(lines);
+        } else {
+            pendingLyrics = null;
+            lyricsLines = [];
+            lyricsIdx = -1;
+            paintLyrics();
+        }
+    }
+
+    function vizDuration() {
+        if (current.duration) return current.duration;
+        if (playing || displayHold != null) return waveDuration || 0;
+        return 0;
+    }
+    function vizTime() {
+        // HTML audio is the clock, including after a seek. Sendspin removes
+        // that element, so follow the queue position plus the time since.
+        if (sendspinStreaming && waveAnchorAt) {
+            var extra = playing ? (performance.now() - waveAnchorAt) / 1000 : 0;
+            return waveAnchor + extra;
+        }
+        return songTime();
+    }
+    function noteQueueForViz(q) {
+        var item = null;
+        if (queueIndex >= 0 && queueIndex < queue.length) item = queue[queueIndex];
+        if (!item && q && q.current_item) item = q.current_item;
+        var mi = item && item.media_item;
+        var dur = 0;
+        if (item && typeof item.duration === 'number' && item.duration > 0) dur = item.duration;
+        else if (mi && typeof mi.duration === 'number' && mi.duration > 0) dur = mi.duration;
+        if (dur) waveDuration = dur;
+        if (sendspinStreaming && displayHold == null && !seekPointer && performance.now() >= vizSeekUntil) {
+            var elapsed = null;
+            if (q && typeof q.corrected_elapsed_time === 'number') elapsed = q.corrected_elapsed_time;
+            else if (q && typeof q.elapsed_time === 'number') elapsed = q.elapsed_time;
+            if (elapsed != null) {
+                waveAnchor = elapsed;
+                waveAnchorAt = performance.now();
+            }
+        }
+        loadWave(item);
+    }
+    function waveMaps(item) {
+        var mi = item && (item.media_item || item);
+        var maps = mi && mi.provider_mappings;
+        if (!Array.isArray(maps)) return [];
+        return maps.filter(function (m) {
+            return m && m.item_id && (m.provider_instance || m.provider_domain);
+        });
+    }
+    function loadWave(item) {
+        if (!SHOW.viz) return;
+        var maps = waveMaps(item);
+        if (!maps.length) return;
+        var key = maps.map(function (m) {
+            return (m.provider_instance || m.provider_domain) + ':' + m.item_id;
+        }).join('|');
+        // Retry a track that had no analysis yet. Skip while a request is open
+        // or the bins are already here.
+        if (key === waveKey && (wave || wavePending)) return;
+        var req = ++waveReq;
+        waveKey = key;
+        wavePending = true;
+        function tryAt(i) {
+            if (req !== waveReq) return;
+            if (i >= maps.length) {
+                wavePending = false;
+                if (!wave) paintViz();
+                return;
+            }
+            var m = maps[i];
+            rpc('audio_analysis/wave_form', {
+                item_id: String(m.item_id),
+                provider_instance_id_or_domain: String(m.provider_instance || m.provider_domain)
+            }).then(function (bins) {
+                if (req !== waveReq) return;
+                if (Array.isArray(bins) && bins.length) {
+                    wavePending = false;
+                    wave = bins;
+                    paintViz();
+                    return;
+                }
+                tryAt(i + 1);
+            }).catch(function () {
+                if (req !== waveReq) return;
+                tryAt(i + 1);
+            });
+        }
+        tryAt(0);
+    }
+    function paintViz() {
+        var cv = document.getElementById('kiosk-viz');
+        if (!cv) return;
+        var w = cv.clientWidth || window.innerWidth;
+        var h = cv.clientHeight || window.innerHeight;
+        if (w < 1 || h < 1) return;
+        if (cv.width !== w || cv.height !== h) {
+            cv.width = w;
+            cv.height = h;
+        }
+        var ctx = cv.getContext('2d');
+        ctx.clearRect(0, 0, cv.width, cv.height);
+        var dur = vizDuration();
+        if (!SHOW.viz || !wave || !wave.length || !dur) return;
+        var pos = vizTime();
+        if (pos < 0) pos = 0;
+        if (pos > dur) pos = dur;
+        var n = wave.length;
+        var origin = (pos / dur) * n - (VIZ_BARS - 1) / 2;
+        var gap = 2;
+        var bw = cv.width / VIZ_BARS;
+        for (var i = 0; i < VIZ_BARS; i++) {
+            var idx = origin + i;
+            var v = 0;
+            if (idx >= 0 && idx < n) {
+                var i0 = Math.floor(idx);
+                var i1 = Math.min(n - 1, i0 + 1);
+                var frac = idx - i0;
+                var a = Number(wave[i0]) || 0;
+                var b = Number(wave[i1]) || 0;
+                v = a + (b - a) * frac;
+            }
+            if (v < 0) v = 0;
+            if (v > 1) v = 1;
+            var bh = v * cv.height * 0.42;
+            if (bh < 1) continue;
+            ctx.fillStyle = 'rgba(79,140,255,' + (0.28 + 0.62 * v).toFixed(3) + ')';
+            ctx.fillRect(i * bw, cv.height - bh, Math.max(1, bw - gap), bh);
+        }
+    }
+    function vizLoop() {
+        vizFrame = requestAnimationFrame(vizLoop);
+        if (SHOW.viz) paintViz();
+        paintLyrics();
+    }
+    function syncViz() {
+        var follow = playing && (SHOW.viz || (SHOW.lyrics && lyricsLines.length));
+        if (!follow) {
+            if (vizFrame) { cancelAnimationFrame(vizFrame); vizFrame = 0; }
+            if (SHOW.viz) paintViz();
+            paintLyrics();
+            return;
+        }
+        if (!vizFrame) vizFrame = requestAnimationFrame(vizLoop);
+    }
+    function lyricIndex(t, dur) {
+        var timed = false;
+        var i;
+        for (i = 0; i < lyricsLines.length; i++) {
+            if (typeof lyricsLines[i].t === 'number') { timed = true; break; }
+        }
+        if (!timed) {
+            if (!dur || dur <= 0) return 0;
+            var pos = t < 0 ? 0 : t;
+            if (pos > dur) pos = dur;
+            var at = Math.floor((pos / dur) * lyricsLines.length);
+            if (at >= lyricsLines.length) at = lyricsLines.length - 1;
+            return at;
+        }
+        var idx = -1;
+        for (i = 0; i < lyricsLines.length; i++) {
+            if (typeof lyricsLines[i].t !== 'number') continue;
+            if (lyricsLines[i].t <= t) idx = i;
+            else break;
+        }
+        return idx;
+    }
+    function paintLyrics() {
+        var el = document.getElementById('kiosk-lyrics');
+        if (!el) return;
+        if (!SHOW.lyrics || !lyricsLines.length) {
+            if (!el.classList.contains('hidden')) el.classList.add('hidden');
+            if (el.childElementCount) el.textContent = '';
+            lyricsIdx = -1;
+            return;
+        }
+        var idx = lyricIndex(vizTime(), vizDuration());
+        if (idx === lyricsIdx && el.childElementCount === 3) return;
+        lyricsIdx = idx;
+        var prev = idx > 0 ? lyricsLines[idx - 1].text : '';
+        var cur = idx >= 0 ? lyricsLines[idx].text : '';
+        var next = idx >= 0 && idx + 1 < lyricsLines.length ? lyricsLines[idx + 1].text : (idx < 0 && lyricsLines.length ? lyricsLines[0].text : '');
+        el.classList.remove('hidden');
+        el.innerHTML = '<div class="l">' + esc(prev) + '</div>' +
+            '<div class="l current">' + esc(cur) + '</div>' +
+            '<div class="l">' + esc(next) + '</div>';
+    }
+    window.addEventListener('resize', function () { if (!vizFrame) paintViz(); });
+
     async function fetchParty() {
         var el = document.getElementById('kiosk-party');
         if (!SHOW.party) { el.classList.add('hidden'); return; }
         try {
-            var url = await rpc('party/url');
-            if (!url) { el.classList.add('hidden'); return; }
-            var cfg = await rpc('party/config');
-            var name = cfg && cfg.party_name;
-            var qrText = cfg && cfg.qr_text;
+            var res = await fetch('/api/party');
+            if (!res.ok) { el.classList.add('hidden'); return; }
+            var info = await res.json();
+            if (!info || !info.active) {
+                el.classList.add('hidden');
+                el.dataset.version = '';
+                return;
+            }
+            var version = info.version || '1';
+            if (el.dataset.version === version && !el.classList.contains('hidden')) return;
+            el.dataset.version = version;
             el.classList.remove('hidden');
-            el.innerHTML = '<img src="/api/party/qr.svg" alt="Join">' +
-                (name ? '<div class="name">' + esc(name) + '</div>' : '') +
-                (qrText ? '<div class="qr">' + esc(qrText) + '</div>' : '');
+            el.innerHTML = '<img src="/api/party/qr.svg?v=' + encodeURIComponent(version) + '" alt="Join">' +
+                (info.name ? '<div class="name">' + esc(info.name) + '</div>' : '') +
+                (info.qr_text ? '<div class="qr">' + esc(info.qr_text) + '</div>' : '');
         } catch (e) { el.classList.add('hidden'); }
     }
 
-    // --- Queue ---
     function fetchQueue() {
-        if (!playerId) return;
+        if (!playerId || !TOKEN) return;
         rpc('player_queues/get_active_queue', { player_id: playerId }).then(function (q) {
             if (!q || !q.queue_id) return;
             return rpc('player_queues/items', { queue_id: q.queue_id, limit: 200 }).then(function (items) {
-                queue = items || [];
+                queue = Array.isArray(items) ? items : [];
                 queueIndex = q.current_index != null ? q.current_index : -1;
                 renderQueue();
+                noteQueueForViz(q);
             });
-        }).catch(function () { /* noop */ });
+        }).catch(function () { /* queue is optional until playback starts */ });
     }
     function renderQueue() {
-        if (!KIOSK) return;
         var el = document.getElementById('kiosk-queue');
         if (!queue.length) { el.classList.add('hidden'); return; }
         el.classList.remove('hidden');
         el.innerHTML = queue.map(function (qi, i) {
             var mi = qi.media_item || {};
+            var img = imageUrl(mi);
             return '<div class="qrow' + (i === queueIndex ? ' active' : '') + '">' +
-                (imageUrl(mi) ? '<img src="' + imageUrl(mi) + '" alt="">' : '') +
-                '<div class="qt">' + esc(mi.name || qi.name || '') + '</div>' +
-                '<div class="qa">' + esc(artistStr(mi) || '') + '</div></div>';
+                (img ? '<img src="' + img + '" alt="">' : '') +
+                '<div class="qmeta"><div class="qt">' + esc(mi.name || qi.name || '') + '</div>' +
+                '<div class="qa">' + esc(artistStr(mi) || '') + '</div></div></div>';
         }).join('');
     }
 
-    // --- Controls ---
-    function bindControls() {
-        document.getElementById('play').onclick = function () { cmd(playing ? 'players/cmd/pause' : 'players/cmd/play'); };
-        document.getElementById('next').onclick = function () { cmd('players/cmd/next'); };
-        document.getElementById('prev').onclick = function () { cmd('players/cmd/previous'); };
-        document.getElementById('k-play').onclick = function () { cmd(playing ? 'players/cmd/pause' : 'players/cmd/play'); };
-        document.getElementById('k-next').onclick = function () { cmd('players/cmd/next'); };
-        document.getElementById('k-prev').onclick = function () { cmd('players/cmd/previous'); };
-        document.getElementById('volume').oninput = function (e) {
-            var v = Number(e.target.value);
-            audio.volume = v / 100;
-            cmd('players/cmd/volume_set', { volume_level: v });
+    function seekToSong(seconds) {
+        var dur = current.duration || 0;
+        var t = Math.max(0, dur ? Math.min(dur, seconds) : seconds);
+        displayHold = t;
+        // Keep the energy window on the seek target while Sendspin has no
+        // audio element to read the position from. Ignore a stale queue poll
+        // for a moment so it does not pull the bars back.
+        vizSeekUntil = performance.now() + 2000;
+        if (sendspinStreaming) {
+            waveAnchor = t;
+            waveAnchorAt = performance.now();
+        }
+        document.getElementById('kiosk-time').textContent = fmt(t);
+        if (dur) document.getElementById('kiosk-seek').value = String(Math.round((t / dur) * 1000));
+        if (!vizFrame) paintViz();
+        paintLyrics();
+        // The queue rebuilds the stream. Do not move audio.currentTime to the
+        // song position: that file starts at the seek point.
+        cmd('players/cmd/seek', { position: Math.round(t) }).catch(function () {
+            displayHold = null;
+            paintClock();
+        });
+    }
+    function applyVolume(level, immediate) {
+        level = Math.max(0, Math.min(100, Math.round(level)));
+        audio.volume = level / 100;
+        document.getElementById('kiosk-volume').value = String(level);
+        clearTimeout(volumeTimer);
+        var send = function () {
+            cmd('players/cmd/volume_set', { volume_level: level }).catch(function () {});
         };
-        var seek = document.getElementById('seek');
-        seek.oninput = function (e) { var t = (Number(e.target.value) / 1000) * (current.duration || 0); audio.currentTime = t; cmd('players/cmd/seek', { position: Math.round(t) }); };
-        var kseek = document.getElementById('kiosk-seek');
-        kseek.oninput = function (e) { var t = (Number(e.target.value) / 1000) * (current.duration || 0); audio.currentTime = t; cmd('players/cmd/seek', { position: Math.round(t) }); };
-        audio.ontimeupdate = function () {
-            var p = current.duration ? Math.round((audio.currentTime / current.duration) * 1000) : 0;
-            seek.value = p; kseek.value = p;
-            document.getElementById('kiosk-time').textContent = fmt(audio.currentTime);
-            if (SHOW.lyrics) highlightLyrics();
-        };
-        audio.onended = function () { cmd('players/cmd/next'); };
+        if (immediate) send();
+        else volumeTimer = setTimeout(send, 80);
     }
 
-    // --- Kiosk controls auto-hide ---
+    function bindControls() {
+        document.getElementById('k-play').onclick = function () {
+            cmd(playing ? 'players/cmd/pause' : 'players/cmd/play').catch(function () {});
+        };
+        document.getElementById('k-next').onclick = function () { cmd('players/cmd/next').catch(function () {}); };
+        document.getElementById('k-prev').onclick = function () { cmd('players/cmd/previous').catch(function () {}); };
+        document.getElementById('kiosk-volume').oninput = function (e) {
+            applyVolume(Number(e.target.value), false);
+        };
+        var kseek = document.getElementById('kiosk-seek');
+        kseek.addEventListener('pointerdown', function () { seekPointer = true; });
+        kseek.addEventListener('pointerup', function () { seekPointer = false; });
+        kseek.addEventListener('pointercancel', function () { seekPointer = false; });
+        kseek.oninput = function (e) {
+            var t = (Number(e.target.value) / 1000) * (current.duration || 0);
+            document.getElementById('kiosk-time').textContent = fmt(t);
+        };
+        kseek.onchange = function (e) {
+            seekPointer = false;
+            seekToSong((Number(e.target.value) / 1000) * (current.duration || 0));
+        };
+        audio.ontimeupdate = function () {
+            paintClock();
+            if (!vizFrame) paintLyrics();
+        };
+        audio.addEventListener('loadedmetadata', applyPendingSeek);
+        audio.addEventListener('canplay', applyPendingSeek);
+        audio.onended = function () {
+            // The page often has no Music Assistant token, so next goes over
+            // the player socket. The provider then advances the queue.
+            if (isPrimeSource() || sendspinStreaming) return;
+            playing = false;
+            sync();
+            endReported = false;
+            reportTrackEnded();
+        };
+    }
+
     var hideTimer = null;
     function showKioskControls() {
-        if (!KIOSK || !SHOW.controls) return;
+        if (!SHOW.controls) return;
         var el = document.getElementById('kiosk-controls');
         el.classList.add('visible');
         clearTimeout(hideTimer);
         hideTimer = setTimeout(function () { el.classList.remove('visible'); }, 3500);
     }
 
-    // --- Search ---
-    var searchTimer = null;
-    document.getElementById('search').oninput = function (e) {
-        clearTimeout(searchTimer);
-        var q = e.target.value.trim();
-        if (!q) return;
-        searchTimer = setTimeout(function () {
-            setStatus('Searching…');
-            rpc('music/search', { query: q, limit: 40 }).then(function (d) {
-                renderGrid([].concat(d.tracks || [], d.albums || [], d.playlists || []));
-                setStatus('');
-            }).catch(function (err) { setStatus(err.message); });
-        }, 350);
-    };
-
-    // --- Keyboard ---
     document.addEventListener('keydown', function (e) {
         if (e.target.tagName === 'INPUT') return;
         switch (e.key) {
-            case ' ': e.preventDefault(); cmd(playing ? 'players/cmd/pause' : 'players/cmd/play'); break;
-            case 'ArrowRight': cmd('players/cmd/seek', { position: Math.min(current.duration || 0, Math.round(audio.currentTime + 10)) }); break;
-            case 'ArrowLeft': cmd('players/cmd/seek', { position: Math.max(0, Math.round(audio.currentTime - 10)) }); break;
-            case 'ArrowUp': e.preventDefault(); audio.volume = Math.min(1, audio.volume + 0.05); break;
-            case 'ArrowDown': e.preventDefault(); audio.volume = Math.max(0, audio.volume - 0.05); break;
-            case 'n': case 'N': cmd('players/cmd/next'); break;
-            case 'p': case 'P': cmd('players/cmd/previous'); break;
+            case ' ': e.preventDefault(); cmd(playing ? 'players/cmd/pause' : 'players/cmd/play').catch(function () {}); break;
+            case 'ArrowRight': seekToSong(songTime() + 10); break;
+            case 'ArrowLeft': seekToSong(Math.max(0, songTime() - 10)); break;
+            case 'ArrowUp': e.preventDefault(); applyVolume(Number(document.getElementById('kiosk-volume').value) + 5, true); break;
+            case 'ArrowDown': e.preventDefault(); applyVolume(Number(document.getElementById('kiosk-volume').value) - 5, true); break;
+            case 'n': case 'N': cmd('players/cmd/next').catch(function () {}); break;
+            case 'p': case 'P': cmd('players/cmd/previous').catch(function () {}); break;
         }
     });
 
-    // --- Sendspin ---
     function getDefaultSendspinUrl() {
         return 'http://' + location.hostname + ':8927';
     }
+    function showPairPin(pin) {
+        var el = document.getElementById('kiosk-pair');
+        if (!el) return;
+        if (!pin) { el.classList.add('hidden'); el.textContent = ''; return; }
+        el.classList.remove('hidden');
+        el.textContent = 'Pairing code ' + pin;
+    }
+    async function loadSendspinModule() {
+        if (!sendspinModule) sendspinModule = await import('./sendspin-js/index.js');
+        return sendspinModule;
+    }
+    async function prepareSendspinIdentity() {
+        try {
+            var module = await loadSendspinModule();
+            var identity = module.loadSendspinClientIdentity();
+            sendspinClientId = identity && identity.clientId ? identity.clientId : '';
+        } catch (e) {
+            sendspinClientId = '';
+        }
+    }
     async function initSendspin() {
-        if (!SENDSPIN) return;
+        if (!SENDSPIN || window.__sendspinPlayer) return;
         setStatus('Connecting Sendspin…');
         try {
-            var module = await import('./sendspin-js/index.js');
-            var SendspinPlayer = module.SendspinPlayer;
-            var bridgeClientId = params.get('sendspin_client_id');
+            var module = await loadSendspinModule();
             var sendspinUrl = params.get('sendspin_url') || getDefaultSendspinUrl();
             var cfg = {
-                playerId: bridgeClientId || ('web-kiosk-' + deviceId.substring(0, 8)),
                 baseUrl: sendspinUrl,
-                clientName: bridgeClientId ? 'Web Kiosk (Sendspin)' : 'Web Kiosk Player',
+                clientName: 'Web Kiosk',
+                productName: 'Web Kiosk',
                 correctionMode: 'sync',
-                onStateChange: function () { setSync('synced'); }
+                onStateChange: function () { setSync('synced'); },
+                onPairingPin: function (pin) { showPairPin(pin); }
             };
+            // opus-encdec is not vendored; browsers without WebCodecs stay on FLAC/PCM.
             if (typeof AudioDecoder === 'undefined') cfg.codecs = ['flac', 'pcm'];
-            window.__sendspinPlayer = new SendspinPlayer(cfg);
-            await window.__sendspinPlayer.connect();
+            var player = new module.SendspinPlayer(cfg);
+            window.__sendspinPlayer = player;
+            wrapSendspinHooks(player.core);
+            if (!sendspinUnlocked) {
+                player.unlock().then(function () {
+                    sendspinUnlocked = true;
+                    maybeDisarmAudio();
+                }).catch(function () { /* the next gesture tries again */ });
+            }
+            await player.connect();
             setSync('synced');
-        } catch (e) { setSync('error'); setStatus('Sendspin error: ' + e.message); }
+            setStatus('');
+        } catch (e) {
+            setSync('error');
+            setStatus('Sendspin error: ' + e.message);
+            sendspinUnlocked = true;
+            maybeDisarmAudio();
+        }
+    }
+    function wrapSendspinHooks(core) {
+        // The core exposes these callbacks as setters only. Read the stored
+        // handler, then chain ours in front so the scheduler still runs.
+        function chain(name, before) {
+            var previous = core['_' + name];
+            core[name] = function () {
+                before.apply(this, arguments);
+                if (typeof previous === 'function') return previous.apply(core, arguments);
+            };
+        }
+        chain('onStreamStart', function () {
+            sendspinStreaming = true;
+            audio.pause();
+            audio.removeAttribute('src');
+            pendingSeek = null;
+            playing = true;
+            sync();
+            fetchQueue();
+        });
+        chain('onStreamEnd', function () {
+            sendspinStreaming = false;
+            if (audio.paused) { playing = false; sync(); }
+        });
+        chain('onStreamClear', function () {
+            sendspinStreaming = false;
+        });
     }
     function setSync(state) {
         var el = document.getElementById('kiosk-sync');
@@ -484,19 +913,22 @@
         el.textContent = state === 'synced' ? 'SYNC' : state === 'error' ? 'ERROR' : 'SYNCING…';
     }
 
-    // --- Boot ---
-    function boot() {
-        if (KIOSK) document.body.classList.add('kiosk');
-        buildMenu();
+    async function boot() {
+        document.body.classList.add('kiosk');
         bindControls();
         renderNow();
         sync();
+        prepareAudioUnlock();
+        await prepareSendspinIdentity();
         connectWS();
-        if (MA_URL && TOKEN) { loadSection(0); setInterval(fetchQueue, 15000); setInterval(fetchParty, 10000); }
-        initSendspin();
-        if (KIOSK && SHOW.controls) {
+        if (SHOW.party) {
+            fetchParty();
+            setInterval(fetchParty, 10000);
+        }
+        if (TOKEN) setInterval(fetchQueue, 15000);
+        if (SHOW.controls) {
             document.addEventListener('mousemove', showKioskControls);
-            document.addEventListener('touchstart', showKioskControls);
+            document.addEventListener('touchstart', showKioskControls, { passive: true });
             showKioskControls();
         }
     }

@@ -121,8 +121,11 @@ export class WebSocketManager {
                 this.ws = new WebSocket(url);
                 this.ws.binaryType = "arraybuffer";
                 this.shouldReconnect = true;
+                // Browsers fire close even for attempts that never opened.
+                let opened = false;
                 this.ws.onopen = () => {
                     console.log("Sendspin: WebSocket connected");
+                    opened = true;
                     const wasReconnecting = this.isReconnecting;
                     this.isReconnecting = false;
                     this.reconnectAttempt = 0;
@@ -148,7 +151,7 @@ export class WebSocketManager {
                 };
                 this.ws.onclose = () => {
                     console.log("Sendspin: WebSocket disconnected");
-                    if (this.onCloseHandler) {
+                    if (opened && this.onCloseHandler) {
                         this.onCloseHandler();
                     }
                     // Try to reconnect after a delay if we should reconnect
@@ -214,13 +217,23 @@ export class WebSocketManager {
             this.ws = null;
         }
     }
-    // Send message to server (JSON)
-    send(message) {
+    // Send a cleartext text frame (handshake only).
+    sendText(data) {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify(message));
+            this.ws.send(data);
         }
         else {
-            console.warn("Sendspin: Cannot send message, WebSocket not connected");
+            console.warn("Sendspin: Cannot send text, WebSocket not connected");
+        }
+    }
+    // Send a binary frame (Noise transport ciphertext).
+    sendBinary(data) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            // TS types Uint8Array as ArrayBufferLike, DOM lib wants ArrayBuffer.
+            this.ws.send(data);
+        }
+        else {
+            console.warn("Sendspin: Cannot send binary, WebSocket not connected");
         }
     }
     // Check if WebSocket is connected

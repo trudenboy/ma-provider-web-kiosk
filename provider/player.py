@@ -20,10 +20,36 @@ if TYPE_CHECKING:
     from .provider import WebKioskProvider
 
 
+def _positive_seconds(value: object) -> float | None:
+    """Return a duration in seconds, or None when the value is missing."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        return None
+    return float(value)
+
+
+def media_timeline(media: object) -> tuple[float | None, float]:
+    """
+    Return the song length and where the served audio starts in that song.
+
+    After a seek, Music Assistant hands the player a stream that begins at the
+    seek point, so ``stream_duration`` is only the remainder. The audio element
+    clock still starts at 0. Callers add this offset when they draw the song.
+    """
+    duration = _positive_seconds(getattr(media, "duration", None))
+    stream = _positive_seconds(getattr(media, "stream_duration", None))
+    if duration is None:
+        return stream, 0.0
+    if stream is not None and stream < duration:
+        return duration, duration - stream
+    return duration, 0.0
+
+
 class WebKioskPlayer(Player):
     """Represents a web browser kiosk as a Music Assistant player."""
 
     current_stream_url: str | None = None
+    # sendspin-js 5 client id (base64url public key). None until the browser announces it.
+    sendspin_client_id: str | None = None
     output_format: str = "mp3"
     _skip_ws_depth: int = 0
     _accepted_position: bool = False
@@ -62,8 +88,10 @@ class WebKioskPlayer(Player):
         self._attr_powered = True
         self._attr_volume_level = 100
         self.output_format = output_format
+        self.sendspin_client_id = None
         self._skip_ws_depth = 0
         self._accepted_position = False
+        self._track_end_handled = False
 
     @property
     def requires_flow_mode(self) -> bool:
@@ -107,15 +135,18 @@ class WebKioskPlayer(Player):
         self._last_ws_position = None
         self._track_started_at = time.monotonic()
         self._accepted_position = False
+        self._track_end_handled = False
         self.update_state()
 
         if not self._skip_ws_notify:
+            song_length, stream_start = media_timeline(media)
             cast("WebKioskProvider", self.provider).notify_play_started(
                 self.player_id,
                 title=media.title,
                 artist=media.artist,
                 image_url=media.image_url,
-                duration=media.stream_duration or media.duration,
+                duration=song_length,
+                start=stream_start,
             )
 
     async def play(self) -> None:
@@ -267,6 +298,24 @@ class WebKioskPlayer(Player):
         if not isinstance(duration, (int, float)) or duration <= 0:
             return None
         return float(duration)
+
+    def playback_reached_end(self) -> bool:
+        """
+        Return whether playback has reached the end of the current song.
+
+        Position reports are seconds into the file Music Assistant is serving.
+        After a seek that file is only the remainder, so the song position is
+        the seek origin plus that file position. Reports arrive every few
+        seconds, so the end counts from a few seconds short of the duration.
+        """
+        media = self._attr_current_media
+        if media is None:
+            return False
+        song, start = media_timeline(media)
+        if song is None:
+            return True
+        file_pos = float(self._attr_elapsed_time or 0)
+        return start + file_pos >= song - 8
 
     async def _resume_from_pause(self) -> None:
         """Resume playback after pause — tell the kiosk to unpause its audio element."""

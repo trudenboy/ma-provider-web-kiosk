@@ -3,7 +3,8 @@
  * reconnections, as the spec requires.
  */
 import { clampSyncDelayMs } from "../sync-delay.js";
-const STATIC_DELAY_STORAGE_KEY = "sendspin-static-delay-ms";
+// Ignore delays saved before fixed scheduling headroom was removed (#159).
+const STATIC_DELAY_STORAGE_KEY = "sendspin-static-delay-ms-v2";
 export class StaticDelayStore {
     constructor(storage) {
         this.storage = storage;

@@ -21,38 +21,6 @@ function detectIsCastRuntime() {
         return false;
     return /CrKey/i.test(navigator.userAgent);
 }
-function detectIsSafari() {
-    if (typeof navigator === "undefined")
-        return false;
-    const ua = navigator.userAgent;
-    return /Safari/i.test(ua) && !/Chrome/i.test(ua);
-}
-function detectIsMac() {
-    if (typeof navigator === "undefined")
-        return false;
-    return /Macintosh/i.test(navigator.userAgent);
-}
-function detectIsWindows() {
-    if (typeof navigator === "undefined")
-        return false;
-    return /Windows/i.test(navigator.userAgent);
-}
-/**
- * Get platform-specific default static delay in milliseconds.
- * Based on testing across various platforms and browsers.
- */
-function getDefaultSyncDelay() {
-    if (detectIsIOS())
-        return 250;
-    if (detectIsAndroid())
-        return 200;
-    if (detectIsMac())
-        return detectIsSafari() ? 190 : 150;
-    if (detectIsWindows())
-        return 250;
-    // Linux and others
-    return 200;
-}
 // Add a small cushion beyond the measured buffered runway so delayed timer
 // delivery does not cut playback off just before the last scheduled audio ends.
 const DISCONNECT_PLAYBACK_RESET_GRACE_MS = 250;
@@ -82,15 +50,14 @@ export class SendspinPlayer {
         // Create core (protocol + decoding). It resolves the effective initial
         // delay, so read it back below for the scheduler's starting value.
         this.core = new SendspinCore({
-            playerId: config.playerId,
             baseUrl: config.baseUrl,
             clientName: config.clientName,
+            productName: config.productName,
             webSocket: config.webSocket,
             codecs: config.codecs,
-            bufferCapacity: config.bufferCapacity ??
-                (outputMode === "media-element" ? 1024 * 1024 * 5 : 1024 * 1024 * 1.5),
+            bufferCapacity: config.bufferCapacity,
             syncDelay: config.syncDelay,
-            defaultSyncDelay: getDefaultSyncDelay(),
+            defaultSyncDelay: config.defaultSyncDelay,
             storage,
             requiredLeadTimeMs: config.requiredLeadTimeMs,
             minBufferMs: config.minBufferMs,
@@ -100,6 +67,16 @@ export class SendspinPlayer {
             getExternalVolume: config.getExternalVolume,
             reconnect: config.reconnect,
             onStateChange: config.onStateChange,
+            onPairing: config.onPairing,
+            onPairingPin: config.onPairingPin,
+            pinOutChannels: config.pinOutChannels,
+            minPinLength: config.minPinLength,
+            staticPin: config.staticPin,
+            staticPinLocations: config.staticPinLocations,
+            pairingPskLocations: config.pairingPskLocations,
+            suite: config.suite,
+            unpairedAccess: config.unpairedAccess,
+            longTermPsks: config.longTermPsks,
         });
         const syncDelay = this.core.getSyncDelayMs();
         // Create scheduler (Web Audio playback)
@@ -125,7 +102,9 @@ export class SendspinPlayer {
         };
         this.core.onStreamStart = (format, isFormatUpdate) => {
             this.scheduler.initAudioContext();
-            this.scheduler.resumeAudioContext();
+            void this.scheduler.resumeAudioContext().catch((error) => {
+                console.warn("Sendspin: Failed to resume AudioContext:", error);
+            });
             if (!isFormatUpdate) {
                 this.scheduler.clearBuffers();
             }
@@ -183,6 +162,14 @@ export class SendspinPlayer {
         this.disconnectPlaybackResetTimeout = setTimeout(() => {
             this.resetPlaybackStateAfterDisconnect();
         }, runwaySec * 1000 + DISCONNECT_PLAYBACK_RESET_GRACE_MS);
+    }
+    /**
+     * Initialize and resume audio playback. Call this directly from a click or
+     * tap handler, before any other await, to satisfy browser autoplay policies.
+     */
+    async unlock() {
+        this.scheduler.initAudioContext();
+        await this.scheduler.resumeAudioContext();
     }
     // Connect to Sendspin server
     async connect() {
@@ -268,6 +255,38 @@ export class SendspinPlayer {
     get isConnected() {
         return this.core.isConnected;
     }
+    /** The client's stable identity id (base64url X25519 public key). */
+    get clientId() {
+        return this.core.clientId;
+    }
+    /** The client's Pairing PSK (base64url) for the operator to enter server-side. Null without storage. */
+    get pairingPsk() {
+        return this.core.pairingPsk;
+    }
+    get pairingToken() {
+        return this.core.pairingToken;
+    }
+    /** Rotate the Pairing PSK, returning the new value (null without storage). */
+    rotatePairingPsk() {
+        return this.core.rotatePairingPsk();
+    }
+    /**
+     * Operator gesture that opens the pairing window (~5 minutes, admits one
+     * attempt). Required before each gesture-gated attempt: every static PIN
+     * attempt, and dynamic PIN when escalated or the PIN is shorter than 6.
+     * The "pending" pairing event fires when an attempt is waiting on this.
+     */
+    openPairingWindow() {
+        this.core.openPairingWindow();
+    }
+    /** Cancel an in-progress pairing attempt (sends pair/abort user_cancelled). */
+    cancelPairing() {
+        this.core.cancelPairing();
+    }
+    /** Whether dynamic PIN has escalated to gesture-gating (10 failures). */
+    isDynamicPinEscalated() {
+        return this.core.isDynamicPinEscalated();
+    }
     // Get current correction mode
     get correctionMode() {
         return this.scheduler.correctionMode;
@@ -293,8 +312,9 @@ export class SendspinPlayer {
 export * from "./types.js";
 export { SendspinTimeFilter } from "./core/time-filter.js";
 export { SendspinCore } from "./core/core.js";
+export { loadSendspinClientIdentity } from "./client-identity.js";
 export { SendspinDecoder } from "./audio/decoder.js";
 export { AudioScheduler } from "./audio/scheduler.js";
 // Export platform detection utilities
-export { detectIsAndroid, detectIsIOS, detectIsMobile, detectIsCastRuntime, getDefaultSyncDelay, };
+export { detectIsAndroid, detectIsIOS, detectIsMobile, detectIsCastRuntime };
 //# sourceMappingURL=index.js.map

@@ -2,9 +2,9 @@
 Web Kiosk Player Provider for Music Assistant.
 
 Turns any web browser into a fullscreen kiosk player. Runs an embedded HTTP
-server that serves the kiosk SPA and a per-player push WebSocket; library
-browsing, playback control, and party mode are driven through Music
-Assistant's own JSON-RPC / WebSocket API.
+server that serves the kiosk screen and a per-player push WebSocket. Music is
+chosen in Music Assistant. The screen follows that player. Cover, title,
+energy bars, lyrics, and the party code do not need an API token.
 """
 
 from __future__ import annotations

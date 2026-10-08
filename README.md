@@ -5,20 +5,19 @@ Sendspin multiroom sync.
 
 A spare tablet, a Raspberry Pi display, or a TV's browser can become a
 dedicated, always-on Music Assistant player. The provider runs a tiny embedded
-HTTP server that serves the kiosk app and registers the browser as a player;
-everything else — library browsing, search, queue management, playback control,
-lyrics, and party mode — goes through Music Assistant's own JSON-RPC and
-WebSocket APIs.
+HTTP server that serves the kiosk app and registers the browser as a player.
+Choose music in Music Assistant. The screen follows that player without an
+API token: cover, title, energy bars, lyric lines, and the party code.
+Playback buttons on the page need a token.
 
 ## Features
 
-- Fullscreen kiosk mode (`/web?kiosk=1`) with auto-hiding controls
-- Library browsing (with drill-down) and search via Music Assistant's native API
+- Fullscreen player at `/web` and `/web?kiosk=1`, with auto-hiding controls and a volume slider
 - HTML5 playback served by the Music Assistant streamserver
-- Kiosk overlays: visualizer, synced lyrics, party QR code, queue display
+- Kiosk overlays: energy-track visualizer, three lyric lines, party QR code, queue display
 - Bidirectional WebSocket push (play / stop / pause / resume / seek / position)
 - Kiosk URL builder on the dashboard plus a copyable `kiosk_url` config entry
-- Sendspin multiroom sync with automatic HTTP fallback
+- Sendspin multiroom sync for Music Assistant 2.11 (sendspin-js 5.0.0) with automatic HTTP fallback
 
 ## Kiosk URL builder
 
@@ -33,15 +32,18 @@ Display toggles are URL parameters (`=0` disables):
 - `controls` — playback controls overlay (default on)
 - `party` — party QR overlay (default on)
 - `viz` — visualizer (default on)
-- `lyrics` — synced lyrics panel (default on)
+- `lyrics` — three lyric lines under the artist (default on)
 
 ## Quick start
 
 1. Install the provider and enable it in Music Assistant.
-2. Open the kiosk app and pass the Music Assistant server URL and an auth token:
-   `http://<kiosk-host>:8098/web?kiosk=1&ma_url=http://<ma-host>:8095&token=<token>`
-3. The browser registers as a Music Assistant player and is controllable from
-   anywhere in Music Assistant.
+2. Open the player. `/web` and `/web?kiosk=1` both open it:
+   `http://<kiosk-host>:8098/web?kiosk=1`
+   Add `&token=<token>` when the page itself should change volume, seek, or skip.
+3. The browser registers as a Music Assistant player. Start playback from
+   Music Assistant. The screen follows that player. The first tap or key press
+   on the page allows sound; later tracks start on their own while that page
+   stays open. Closing the page removes the player. Reloading the page keeps it.
 
 ## Configuration
 
