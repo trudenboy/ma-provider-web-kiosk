@@ -483,12 +483,11 @@ class WebKioskProvider(PlayerProvider):
         try:
             queues = self.mass.player_queues
             queue = queues.get_active_queue(player_id)
-            index = getattr(queue, "current_index", None)
-            nxt = (
-                queues.get_next_item(queue.queue_id, index)
-                if queue is not None and index is not None
-                else None
-            )
+            if queue is None:
+                await self.mass.players.cmd_stop(player_id)
+                return
+            index = queue.current_index
+            nxt = queues.get_next_item(queue.queue_id, index) if index is not None else None
             next_index = (
                 queues.index_by_id(queue.queue_id, nxt.queue_item_id) if nxt is not None else None
             )
