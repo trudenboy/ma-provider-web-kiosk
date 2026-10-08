@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] - 2026-10-09
 
+### Added
+
+- The kiosk shows a Sendspin pairing code when the server asks the browser to pair.
+
 ### Changed
 
 - The page is the kiosk player. `/web` and `/web?kiosk=1` both open it. Choose music in Music Assistant. Library browsing and search are no longer part of this page.
@@ -28,9 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When a track ends, the next queue item starts. The last item stops playback instead of leaving the player in the playing state.
 - The party code is shown while guest access is on.
 
-### Added
+## [0.1.1] - 2026-08-28
 
-- The kiosk shows a Sendspin pairing code when the server asks the browser to pair.
+### Fixed
+
+- Localized the kiosk URL configuration description through the provider strings catalog.
+- Hardened local development setup when the expected Music Assistant checkout path is occupied.
 
 ## [0.1.0] - 2026-08-25
 

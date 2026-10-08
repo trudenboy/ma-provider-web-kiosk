@@ -3,9 +3,11 @@
 set -e
 
 echo "==> Setting up Web Kiosk provider..."
+# Locate MA providers directory inside the container venv
 PROVIDERS_DIR=$(/app/venv/bin/python3 -c \
     "import music_assistant.providers, os; print(os.path.dirname(music_assistant.providers.__file__))")
 
+# Remove any existing provider (image may bundle one), then symlink ours
 rm -rf "${PROVIDERS_DIR}/web_kiosk"
 ln -s /tmp/provider "${PROVIDERS_DIR}/web_kiosk"
 echo "==> Provider linked: ${PROVIDERS_DIR}/web_kiosk"
@@ -34,6 +36,10 @@ PYEOF
 )
 if [ -n "$DEPS" ]; then
     echo "==> Installing provider dependencies: $DEPS"
+    # The official ghcr.io/music-assistant/server image ships uv but no pip
+    # in the venv, so the bare `pip install` path crashes on
+    # `/app/venv/bin/pip: not found`. Prefer uv when available; fall back
+    # to pip for any image that still has it.
     if [ -x /app/venv/bin/uv ]; then
         /app/venv/bin/uv pip install --quiet --index-strategy unsafe-best-match --python /app/venv/bin/python $DEPS
     else
