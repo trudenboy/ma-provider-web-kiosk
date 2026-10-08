@@ -579,7 +579,7 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
                 if location := resp.headers.get("Location"):
                     response_headers["Location"] = location
                 return web.Response(status=resp.status, body=payload, headers=response_headers)
-        except (ClientError, TimeoutError, OSError):
+        except ClientError, TimeoutError, OSError:
             logger.exception("Music Assistant proxy failed for %s", url.split("?", 1)[0])
             return web.Response(status=502, text="Music Assistant is unreachable")
 
