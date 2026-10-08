@@ -228,6 +228,10 @@ class WebKioskHTTPServer:
             if not ws.closed:
                 self.provider.mass.create_task(self._ws_send(ws, msg, player_id))
 
+    def client_count(self, player_id: str) -> int:
+        """Return how many browser sockets are open for this player."""
+        return len(self._ws_clients.get(player_id, ()))
+
     def _setup_routes(self) -> None:
         """Register all HTTP routes."""
         self.app.router.add_get("/", self._handle_root)
@@ -443,10 +447,6 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
             logger.debug("WebSocket client disconnected for player %s", player_id)
 
         return ws
-
-    def client_count(self, player_id: str) -> int:
-        """Return how many browser sockets are open for this player."""
-        return len(self._ws_clients.get(player_id, ()))
 
     async def _send_snapshot(
         self, ws: web.WebSocketResponse, player: WebKioskPlayer | None
