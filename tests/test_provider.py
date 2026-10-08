@@ -108,7 +108,9 @@ async def test_publish_wave_sends_stored_bins(provider: WebKioskProvider) -> Non
     media = Mock(provider_mappings=[mapping])
     queue = Mock(current_item=Mock(media_item=media))
     cast("Mock", provider.mass.player_queues).get_active_queue.return_value = queue
-    provider.mass.streams.audio_analysis.get_wave_form = AsyncMock(return_value=[0.2, 1.0])
+    cast("Mock", provider.mass.streams.audio_analysis).get_wave_form = AsyncMock(
+        return_value=[0.2, 1.0]
+    )
     provider.http_server = Mock()
 
     await provider._publish_wave("wk_test", 4)
@@ -121,7 +123,9 @@ async def test_publish_lyrics_sends_parsed_lines(provider: WebKioskProvider) -> 
     media = Mock()
     queue = Mock(current_item=Mock(media_item=media))
     cast("Mock", provider.mass.player_queues).get_active_queue.return_value = queue
-    provider.mass.metadata.get_track_lyrics = AsyncMock(return_value=("one\ntwo", None))
+    cast("Mock", provider.mass.metadata).get_track_lyrics = AsyncMock(
+        return_value=("one\ntwo", None)
+    )
     provider.http_server = Mock()
 
     await provider._publish_lyrics("wk_test", 2)
