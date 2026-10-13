@@ -5,7 +5,7 @@ serves the committed assets and does not install npm dependencies at runtime.
 
 Run `scripts/vendor-sendspin-js.sh` from the repository root to install the
 locked dependencies and rebuild the SDK. Run `npm run check` in this directory
-to verify that every committed asset matches the build, including licenses.
+to verify that every committed asset matches the build, including embedded licenses.
 CI also runs `npm test` to check module loading, identity persistence and PCM
 decoding using the generated entry.
 
@@ -24,6 +24,7 @@ WebCodecs; browsers without WebCodecs are still offered FLAC/PCM by the kiosk.
 No CDN, unresolved package imports or Node builtins are needed by the browser.
 
 `BUILD.json` records the bundled package versions, esbuild version and JS SHA256.
-Full upstream licenses are included in `licenses/`. Generated assets are tracked
+Full upstream licenses and package attribution are embedded in the JS header.
+No separate license files are shipped. Generated assets are tracked
 so provider releases and the standard upstream sync need no build-system changes
 in Music Assistant.
