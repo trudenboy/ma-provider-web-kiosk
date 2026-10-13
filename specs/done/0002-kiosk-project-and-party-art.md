@@ -2,7 +2,7 @@
 id: "0002"
 title: "Project artwork and enlarged Party QR"
 size: M
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 20
 feature_id:
