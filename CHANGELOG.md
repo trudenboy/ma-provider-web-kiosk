@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-10-13
+
+### Added
+
+- The registered player ID is visible in the kiosk interface.
+
+### Changed
+
+- Kiosk playback controls follow the Music Assistant player bar design, with track details, matching icons, responsive layout and a volume panel.
+- Narrow screens use a floating mobile player card with Play/Pause, inline volume and a seek bar; short screens place artwork beside track details.
+
 ## [1.0.5] - 2026-10-13
 
 ### Fixed
