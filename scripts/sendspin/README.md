@@ -7,7 +7,8 @@ Run `scripts/vendor-sendspin-js.sh` from the repository root to install the
 locked dependencies and rebuild the SDK. Run `npm run check` in this directory
 to verify that every committed asset matches the build, including embedded licenses.
 CI also runs `npm test` to check module loading, identity persistence and PCM
-decoding using the generated entry.
+decoding using the generated entry, plus registration during kiosk startup on
+plain HTTP without the secure-context-only `crypto.randomUUID` API.
 
 To update dependencies, edit the exact versions in `package.json`, regenerate
 `package-lock.json` with npm, rebuild and review the generated diff. The Noble
