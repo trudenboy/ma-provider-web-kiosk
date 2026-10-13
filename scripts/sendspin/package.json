@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node build.mjs",
     "check": "node build.mjs --check",
-    "test": "node --experimental-vm-modules --test smoke.test.mjs"
+    "test": "node --experimental-vm-modules --test smoke.test.mjs kiosk.test.mjs"
   },
   "dependencies": {
     "@sendspin/sendspin-js": "5.0.0"
