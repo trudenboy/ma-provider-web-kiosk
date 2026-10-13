@@ -84,6 +84,17 @@ async def test_ws_welcome_carries_player_id(http_client: TestClient[Any, Any]) -
     await ws.close()
 
 
+async def test_ws_welcome_carries_server_version(
+    http_client: TestClient[Any, Any], mass_mock: Mock
+) -> None:
+    """The kiosk can identify the running MA version without an API token."""
+    mass_mock.version = "2.17.0.dev42"
+    ws = await http_client.ws_connect("/ws?device_id=version-test")
+    payload = json.loads((await ws.receive()).data)
+    assert payload["server_version"] == "2.17.0.dev42"
+    await ws.close()
+
+
 async def test_ws_ended_asks_the_provider_to_advance(
     http_client: TestClient[Any, Any], provider: WebKioskProvider
 ) -> None:

@@ -426,7 +426,16 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
             player.on_ws_connected()
         # Tell the kiosk its server-derived player_id so it can target MA
         # JSON-RPC playback commands before the first "play" push arrives.
-        await self._ws_send(ws, json.dumps({"type": "welcome", "player_id": player_id}))
+        await self._ws_send(
+            ws,
+            json.dumps(
+                {
+                    "type": "welcome",
+                    "player_id": player_id,
+                    "server_version": self.provider.mass.version,
+                }
+            ),
+        )
         # A reconnecting/reloaded kiosk needs the current play state, otherwise it
         # stays silent until the next playback command.
         await self._send_snapshot(ws, player)

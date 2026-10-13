@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.8] - 2026-10-13
+
+### Added
+
+- Click the Party QR to show it in the large artwork area; click again or press Escape to close it.
+- Idle players show HTML5 or Sendspin and the running Music Assistant version.
+
+### Changed
+
+- Official Music Assistant and Sendspin artwork replaces the ASCII project marks.
+
 ## [1.0.7] - 2026-10-13
 
 ### Changed
