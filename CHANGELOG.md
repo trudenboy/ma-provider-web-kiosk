@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.6] - 2026-10-13
 
+### Added
+
+- The registered player ID is visible in the kiosk interface.
+
 ### Changed
 
 - Kiosk playback controls follow the Music Assistant player bar design, with track details, matching icons, responsive layout and a volume panel.

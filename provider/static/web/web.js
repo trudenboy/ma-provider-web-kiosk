@@ -163,6 +163,9 @@
         switch (msg.type) {
             case 'welcome':
                 playerId = msg.player_id;
+                var playerLabel = document.getElementById('kiosk-player-id');
+                playerLabel.textContent = 'Player ID: ' + playerId;
+                playerLabel.classList.remove('hidden');
                 setStatus('');
                 sync();
                 if (TOKEN) { fetchQueue(); fetchParty(); }

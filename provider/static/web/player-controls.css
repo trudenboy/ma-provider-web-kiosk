@@ -9,6 +9,12 @@
   --ma-primary: #03a9f4;
 }
 #kiosk-icon-sprite { position:absolute; width:0; height:0; overflow:hidden; }
+#kiosk-player-id {
+  position:absolute; top:max(16px,env(safe-area-inset-top,0px)); left:max(16px,env(safe-area-inset-left,0px));
+  z-index:6; max-width:calc(50vw - 24px); padding:6px 10px; border-radius:6px;
+  background:rgba(10,10,14,.72); color:var(--ma-muted); font-size:11px;
+  font-family:ui-monospace,monospace; overflow-wrap:anywhere; user-select:text;
+}
 .kiosk-icon { width:24px; height:24px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; flex-shrink:0; pointer-events:none; }
 #kiosk-controls {
   position:absolute; inset:auto 0 0; height:var(--kiosk-bar-height);

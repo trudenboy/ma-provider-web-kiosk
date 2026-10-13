@@ -139,3 +139,14 @@ test('server volume updates the slider, percentage and speaker icon together', a
     message({ type: 'volume', level: 0 });
     assert.equal(result.elements.get('k-volume-icon').attributes.get('href'), '#k-icon-volume-x');
 });
+
+for (const search of ['?kiosk=1', '?kiosk=1&sendspin=1']) {
+    test(`registered player identifier is displayed and refreshed (${search})`, async () => {
+        const result = await startKiosk(search);
+        const message = data => result.socketInstances[0].onmessage({ data: JSON.stringify(data) });
+        message({ type: 'welcome', player_id: 'wk-test-player' });
+        assert.equal(result.elements.get('kiosk-player-id')?.textContent, 'Player ID: wk-test-player');
+        message({ type: 'welcome', player_id: 'wk-reconnected-player' });
+        assert.equal(result.elements.get('kiosk-player-id').textContent, 'Player ID: wk-reconnected-player');
+    });
+}
