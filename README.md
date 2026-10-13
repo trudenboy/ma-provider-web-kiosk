@@ -48,7 +48,10 @@ for HTML5. Display additions are opt-in URL parameters (`=1` enables):
 - `viz` — visualizer
 - `lyrics` — lyric lines
 - `queue` — queue display (requires an MA API token)
-- `show_player_id` — selectable player identifier
+- `show_player_id` — extra selectable player identifier label
+
+Without a track, the main title always shows the server-derived Player ID,
+with Music Assistant and its version below it.
 
 Enable **Require MA sign-in for URL builder** in provider settings to protect
 the constructor and player list. Sign in with your MA username/password or an

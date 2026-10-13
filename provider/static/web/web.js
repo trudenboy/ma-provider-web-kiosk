@@ -409,7 +409,7 @@
     function renderNow() {
         var src = current.image ? imageUrl({ image: current.image }) : '';
         var logo = SENDSPIN ? '/web/sendspin.svg' : '/web/music-assistant.svg';
-        var title = hasTrack ? current.title || '—' : SENDSPIN ? 'Sendspin' : 'HTML5';
+        var title = hasTrack ? current.title || '—' : playerId || 'Connecting…';
         var artist = hasTrack ? current.artist || '—' : 'Music Assistant' + (serverVersion ? ' ' + serverVersion : '');
         var box = document.getElementById('kiosk-artbox');
         var art = document.getElementById('kiosk-art');

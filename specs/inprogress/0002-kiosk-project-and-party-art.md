@@ -14,12 +14,12 @@ An idle kiosk shows ASCII marks and empty metadata. Guests cannot enlarge the Pa
 
 ## Solution Summary
 
-Use local official project SVGs as square placeholder artwork. Without a track, show HTML5 or Sendspin and Music Assistant with the actual server version. Clicking the Party QR toggles its image in the large artwork area; clicking the enlarged QR closes it. Playback and track updates continue beneath this display state.
+Use local official project SVGs as square placeholder artwork. Without a track, show the server-derived Player ID and Music Assistant with the actual server version. Clicking the Party QR toggles its image in the large artwork area; clicking the enlarged QR closes it. Playback and track updates continue beneath this display state.
 
 ## Acceptance Criteria
 
 1. No ASCII mark remains; HTML5 uses the MA logo and Sendspin uses the Sendspin logo as idle artwork.
-2. Idle hero and mini player labels show player type and Music Assistant plus its server version.
+2. Idle hero and mini player labels show the Player ID and Music Assistant plus its server version; the optional standalone ID label is controlled independently.
 3. Track metadata and artwork replace idle content when media arrives; stop restores idle content.
 4. The welcome WebSocket payload carries the MA server version, without an API token.
 5. Clicking the small QR opens it in the hero artwork area; clicking it again or the enlarged QR restores the current artwork.

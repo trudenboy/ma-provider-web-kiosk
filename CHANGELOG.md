@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Click the Party QR to show it in the large artwork area; click again or press Escape to close it.
-- Idle players show HTML5 or Sendspin and the running Music Assistant version.
+- Idle players show their Player ID and the running Music Assistant version.
 - Provider settings can require Music Assistant sign-in for the kiosk URL builder.
 
 ### Changed

@@ -178,20 +178,20 @@ for (const [search, type, logo] of [
     ['?kiosk=1&sendspin=0', 'HTML5', '/web/music-assistant.svg'],
     ['?kiosk=1&sendspin=1', 'Sendspin', '/web/sendspin.svg'],
 ]) {
-    test(`idle ${type} player shows project artwork and the MA version`, async () => {
+    test(`idle ${type} player shows its ID, project artwork and the MA version`, async () => {
         const result = await startKiosk(search);
         const message = data => result.socketInstances[0].onmessage({ data: JSON.stringify(data) });
         message({ type: 'welcome', player_id: 'wk-idle', server_version: '2.17.0.dev42' });
-        assert.equal(result.elements.get('kiosk-title').textContent, type);
+        assert.equal(result.elements.get('kiosk-title').textContent, 'wk-idle');
         assert.equal(result.elements.get('kiosk-artist').textContent, 'Music Assistant 2.17.0.dev42');
-        assert.equal(result.elements.get('kiosk-bar-title').textContent, type);
+        assert.equal(result.elements.get('kiosk-bar-title').textContent, 'wk-idle');
         assert.equal(result.elements.get('kiosk-bar-artist').textContent, 'Music Assistant 2.17.0.dev42');
         assert.equal(result.elements.get('kiosk-art').src, logo);
         message({ type: 'play', path: '/track.wav', title: 'Track', artist: 'Artist', image_url: '/cover.jpg', duration: 180 });
         assert.equal(result.elements.get('kiosk-title').textContent, 'Track');
         assert.equal(result.elements.get('kiosk-artist').textContent, 'Artist');
         message({ type: 'stop' });
-        assert.equal(result.elements.get('kiosk-title').textContent, type);
+        assert.equal(result.elements.get('kiosk-title').textContent, 'wk-idle');
         assert.equal(result.elements.get('kiosk-art').src, logo);
     });
 }
@@ -250,7 +250,7 @@ test('a missing server version never exposes undefined in the idle labels', asyn
 
 test('bare kiosk defaults to Sendspin without optional additions', async () => {
     const result = await startKiosk('');
-    assert.equal(result.elements.get('kiosk-title').textContent, 'Sendspin');
+    assert.equal(result.root.classList.contains('sendspin'), true);
     result.socketInstances[0].onmessage({ data: JSON.stringify({ type: 'welcome', player_id: 'wk-default' }) });
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(result.elements.get('kiosk-player-id').classList.contains('hidden'), true);
