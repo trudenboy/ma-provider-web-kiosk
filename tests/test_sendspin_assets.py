@@ -3,17 +3,10 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-import pytest
+from music_assistant.providers.web_kiosk.http_server import STATIC_DIR
 
-VENDOR_ROOT = Path(__file__).resolve().parents[1] / "provider" / "static" / "web" / "sendspin-js"
-# Upstream copies these tests to tests/providers/<domain>/, where this sibling
-# directory does not exist. Skip there instead of failing collection.
-pytestmark = pytest.mark.skipif(
-    not VENDOR_ROOT.is_dir(),
-    reason="Vendored sendspin-js is absent in this layout.",
-)
+VENDOR_ROOT = STATIC_DIR / "web" / "sendspin-js"
 # A real import statement. Comments that mention a package name do not count.
 STATEMENT_FROM = re.compile(r"""^(?:import|export)\b.*?\bfrom\s+['"]([^'"]+)['"]""", re.MULTILINE)
 DYNAMIC_IMPORT = re.compile(r"""import\s*\(\s*['"]([^'"]+)['"]""")

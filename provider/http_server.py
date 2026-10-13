@@ -81,7 +81,7 @@ class WebKioskHTTPServer:
         # 0.0.0.0 is required: kiosk devices on LAN must reach this server by host IP.
         site = web.TCPSite(
             self._runner,
-            "0.0.0.0",
+            "0.0.0.0",  # noqa: S104
             self.port,
             reuse_address=True,
             reuse_port=True,
