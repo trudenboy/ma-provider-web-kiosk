@@ -6,14 +6,21 @@ import { createContext, runInContext, SourceTextModule } from 'node:vm';
 
 const source = await readFile(new URL('../../provider/static/web/web.js', import.meta.url), 'utf8');
 const sdkSource = await readFile(new URL('../../provider/static/web/sendspin-js/index.js', import.meta.url), 'utf8');
+const html = await readFile(new URL('../../provider/static/web/index.html', import.meta.url), 'utf8');
+const elementIds = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]));
 
 async function startKiosk(search, entries = [], randomUUID) {
     const storage = new Map(entries);
     const sockets = [];
+    const socketInstances = [];
+    const apiCalls = [];
     const node = () => ({
         classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-        style: {}, textContent: '', innerHTML: '', value: '',
-        addEventListener() {}, removeEventListener() {}, setAttribute() {}, removeAttribute() {},
+        style: { setProperty(name, value) { this[name] = value; } },
+        dataset: {}, attributes: new Map(), textContent: '', innerHTML: '', value: '',
+        addEventListener() {}, removeEventListener() {}, focus() {},
+        setAttribute(name, value) { this.attributes.set(name, String(value)); },
+        removeAttribute(name) { this.attributes.delete(name); },
         getContext() { return { clearRect() {} }; },
     });
     const elements = new Map();
@@ -28,6 +35,7 @@ async function startKiosk(search, entries = [], randomUUID) {
         document: {
             documentElement: node(), body: node(),
             getElementById(id) {
+                if (!elementIds.has(id)) return null;
                 if (!elements.has(id)) elements.set(id, node());
                 return elements.get(id);
             },
@@ -37,11 +45,16 @@ async function startKiosk(search, entries = [], randomUUID) {
             paused = true;
             addEventListener() {}
             play() { return Promise.reject(Object.assign(new Error('Gesture required'), { name: 'NotAllowedError' })); }
+            pause() { this.paused = true; }
+            removeAttribute() {}
         },
         WebSocket: class {
-            constructor(url) { sockets.push(url); }
+            constructor(url) { sockets.push(url); socketInstances.push(this); }
         },
-        fetch: async () => ({ ok: true, json: async () => ({}) }),
+        fetch: async (url, options) => {
+            if (url === '/api' && options?.body) apiCalls.push(JSON.parse(options.body));
+            return { ok: true, json: async () => ({}) };
+        },
         setInterval() {}, setTimeout() {}, clearTimeout() {},
         requestAnimationFrame() {}, cancelAnimationFrame() {},
         performance: { now: () => 0 },
@@ -60,7 +73,7 @@ async function startKiosk(search, entries = [], randomUUID) {
         startupError = error;
     }
     await new Promise(resolve => setImmediate(resolve));
-    return { sockets, storage, startupError };
+    return { sockets, socketInstances, storage, startupError, elements, apiCalls };
 }
 
 for (const search of ['?kiosk=1', '?kiosk=1&sendspin=1']) {
@@ -94,4 +107,35 @@ test('native UUID generation remains supported', async () => {
     assert.equal(calls, 1);
     assert.equal(result.storage.get('wk_device_id'), `wk-${uuid}`);
     assert.equal(new URL(result.sockets[0]).searchParams.get('device_id'), `wk-${uuid}`);
+});
+
+test('transport icons follow server state and retain their command bindings', async () => {
+    const result = await startKiosk('?kiosk=1&token=test-token');
+    const message = data => result.socketInstances[0].onmessage({ data: JSON.stringify(data) });
+    message({ type: 'welcome', player_id: 'test-player' });
+    message({ type: 'resume' });
+    assert.equal(result.elements.get('k-play-icon').attributes.get('href'), '#k-icon-pause');
+    assert.equal(result.elements.get('k-play').attributes.get('aria-label'), 'Pause');
+    result.elements.get('k-play').onclick();
+    assert.equal(result.apiCalls.at(-1).command, 'players/cmd/pause');
+    message({ type: 'pause' });
+    assert.equal(result.elements.get('k-play-icon').attributes.get('href'), '#k-icon-play');
+    result.elements.get('k-play').onclick();
+    assert.equal(result.apiCalls.at(-1).command, 'players/cmd/play');
+    result.elements.get('k-next').onclick();
+    assert.equal(result.apiCalls.at(-1).command, 'players/cmd/next');
+    result.elements.get('k-prev').onclick();
+    assert.equal(result.apiCalls.at(-1).command, 'players/cmd/previous');
+});
+
+test('server volume updates the slider, percentage and speaker icon together', async () => {
+    const result = await startKiosk('?kiosk=1');
+    const message = data => result.socketInstances[0].onmessage({ data: JSON.stringify(data) });
+    message({ type: 'volume', level: 42 });
+    assert.equal(result.elements.get('kiosk-volume').value, '42');
+    assert.equal(result.elements.get('k-volume-level').textContent, '42%');
+    assert.equal(result.elements.get('k-volume-panel-level').textContent, '42%');
+    assert.equal(result.elements.get('k-volume-icon').attributes.get('href'), '#k-icon-volume-1');
+    message({ type: 'volume', level: 0 });
+    assert.equal(result.elements.get('k-volume-icon').attributes.get('href'), '#k-icon-volume-x');
 });
