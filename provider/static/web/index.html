@@ -7,8 +7,8 @@
 <script>
 try {
   var q = new URLSearchParams(location.search);
-  if (q.get('sendspin') === '1') document.documentElement.classList.add('sendspin');
-  if (q.get('controls') !== '0') document.documentElement.classList.add('controls');
+  if (q.get('sendspin') !== '0') document.documentElement.classList.add('sendspin');
+  if (q.get('controls') === '1') document.documentElement.classList.add('controls');
 } catch (e) {}
 </script>
 <style>

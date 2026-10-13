@@ -25,7 +25,7 @@ Playback buttons on the page need a token.
 
 ## Features
 
-- Fullscreen player at `/web` and `/web?kiosk=1`, with auto-hiding controls and a volume slider
+- Fullscreen Sendspin player at `/kiosk`, with optional controls and additions (`/web` remains an alias)
 - HTML5 playback served by the Music Assistant streamserver
 - Kiosk overlays: energy-track visualizer, three lyric lines, party QR code, queue display
 - Bidirectional WebSocket push (play / stop / pause / resume / seek / position)
@@ -36,23 +36,29 @@ Playback buttons on the page need a token.
 
 Open `http://<kiosk-host>:8098/` for an interactive URL builder that composes
 the kiosk URL with your choice of HTML5 or Sendspin mode and the
-controls / party / visualizer / lyrics display toggles, then copy it. The same
+controls / party / visualizer / lyrics / queue / player ID display toggles, then copy it. The same
 base URL is also shown as the read-only `kiosk_url` field in the provider's
 configuration so you can copy it from Music Assistant.
 
-Display toggles are URL parameters (`=0` disables):
+The clean URL opens Sendspin without optional additions. Use `sendspin=0`
+for HTML5. Display additions are opt-in URL parameters (`=1` enables):
 
-- `controls` — playback controls overlay (default on)
-- `party` — party QR overlay (default on)
-- `viz` — visualizer (default on)
-- `lyrics` — three lyric lines under the artist (default on)
+- `controls` — playback controls
+- `party` — Party QR (click it to enlarge)
+- `viz` — visualizer
+- `lyrics` — lyric lines
+- `queue` — queue display (requires an MA API token)
+- `show_player_id` — selectable player identifier
+
+Enable **Require MA sign-in for URL builder** in provider settings to protect
+the constructor and player list. Sign in with your MA username/password or an
+MA access token. The player URLs remain public; this setting protects the builder.
 
 ## Quick start
 
 1. Install the provider and enable it in Music Assistant.
-2. Open the player. `/web` and `/web?kiosk=1` both open it:
-   `http://<kiosk-host>:8098/web?kiosk=1`
-   Add `&token=<token>` when the page itself should change volume, seek, or skip.
+2. Open `http://<kiosk-host>:8098/kiosk`.
+   This starts a minimal Sendspin player. Add `?controls=1&token=<token>` when the page itself should change volume, seek, or skip.
 3. The browser registers as a Music Assistant player. Start playback from
    Music Assistant. The screen follows that player. The first tap or key press
    on the page allows sound; later tracks start on their own while that page
@@ -66,6 +72,7 @@ Display toggles are URL parameters (`=0` disables):
 | `player_idle_timeout` | `30` | Unregister idle kiosk players after this many minutes |
 | `show_stop_notification` | `false` | Ask for confirmation before closing playback |
 | `enable_sendspin_bridge` | `true` | Register kiosks as Sendspin clients for multiroom sync |
+| `url_builder_require_auth` | `false` | Require MA sign-in for the URL builder and player list |
 | `kiosk_url` | *(read-only)* | Copyable base kiosk URL composed from the MA webserver URL |
 
 ## Development

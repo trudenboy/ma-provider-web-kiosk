@@ -3,11 +3,12 @@
     'use strict';
 
     var params = new URLSearchParams(location.search);
-    // /web is the player. kiosk=1 remains so older links still open this screen.
-    var SENDSPIN = params.get('sendspin') === '1';
+    // /kiosk is the player; /web and kiosk=1 remain compatible aliases.
+    var SENDSPIN = params.get('sendspin') !== '0';
     if (SENDSPIN) document.documentElement.classList.add('sendspin');
-    var FLAG = function (name) { return params.get(name) !== '0'; };
-    var SHOW = { controls: FLAG('controls'), party: FLAG('party'), viz: FLAG('viz'), lyrics: FLAG('lyrics') };
+    var FLAG = function (name) { return params.get(name) === '1'; };
+    var SHOW = { controls: FLAG('controls'), party: FLAG('party'), viz: FLAG('viz'), lyrics: FLAG('lyrics'), queue: FLAG('queue'), playerId: FLAG('show_player_id') };
+    document.documentElement.classList.toggle('controls', SHOW.controls);
 
     var LS = {
         get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
@@ -170,7 +171,7 @@
                 renderNow();
                 var playerLabel = document.getElementById('kiosk-player-id');
                 playerLabel.textContent = 'Player ID: ' + playerId;
-                playerLabel.classList.remove('hidden');
+                playerLabel.classList.toggle('hidden', !SHOW.playerId);
                 setStatus('');
                 sync();
                 if (TOKEN) { fetchQueue(); fetchParty(); }
@@ -249,7 +250,13 @@
                 applyLyrics(msg.lines);
                 break;
             case 'sendspin':
-                if (msg.url) location.href = msg.url;
+                if (msg.url) {
+                    var target = new URL(msg.url, location.protocol + '//' + location.host);
+                    ['controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'ma_url', 'token', 'device_id', 'sendspin_url'].forEach(function (name) {
+                        if (params.has(name) && !target.searchParams.has(name)) target.searchParams.set(name, params.get(name));
+                    });
+                    location.href = target.toString();
+                }
                 break;
         }
     }
@@ -414,7 +421,8 @@
             art.alt = SENDSPIN ? 'Sendspin' : 'Music Assistant';
             box.classList.add('has-art', 'project-art');
             clearImage(bg);
-            bg.style.opacity = '0';
+            bg.src = logo;
+            bg.style.opacity = '1';
         }
         art.alt = title;
         document.getElementById('kiosk-title').textContent = title;
@@ -766,7 +774,7 @@
     }
 
     function fetchQueue() {
-        if (!playerId || !TOKEN) return;
+        if (!SHOW.queue || !playerId || !TOKEN) return;
         rpc('player_queues/get_active_queue', { player_id: playerId }).then(function (q) {
             if (!q || !q.queue_id) return;
             return rpc('player_queues/items', { queue_id: q.queue_id, limit: 200 }).then(function (items) {
@@ -1038,7 +1046,7 @@
             fetchParty();
             setInterval(fetchParty, 10000);
         }
-        if (TOKEN) setInterval(fetchQueue, 15000);
+        if (SHOW.queue && TOKEN) setInterval(fetchQueue, 15000);
         if (SHOW.controls) {
             document.addEventListener('mousemove', showKioskControls);
             document.addEventListener('touchstart', showKioskControls, { passive: true });
