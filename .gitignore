@@ -219,3 +219,6 @@ __marimo__/
 
 # Local Music Assistant test stand
 .ma-data/
+
+# Provider browser asset build dependencies
+node_modules/

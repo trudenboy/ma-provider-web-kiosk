@@ -73,6 +73,10 @@ Display toggles are URL parameters (`=0` disables):
 See `AGENTS.md` for the project structure and the Music Assistant provider
 development loop (feature specs, TDD, verification, changelog discipline).
 
+The Sendspin SDK is built from locked npm dependencies. See
+[browser asset build instructions](scripts/sendspin/README.md) for rebuilding
+and checking the committed bundle; Node is only needed during development.
+
 ```bash
 uv run pytest          # run tests
 uv run ruff check provider/

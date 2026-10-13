@@ -1,0 +1,29 @@
+name: Sendspin assets
+on:
+  pull_request:
+    branches: [main, dev]
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: scripts/sendspin/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: scripts/sendspin
+      - name: Verify generated assets
+        run: npm run check
+        working-directory: scripts/sendspin
+      - name: Verify browser module behavior
+        run: npm test
+        working-directory: scripts/sendspin
