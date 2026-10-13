@@ -65,7 +65,7 @@ read-only **Kiosk URL** setting also contains the base player URL.
 | `lyrics` | off | `lyrics=1` enables lyric lines when available |
 | `queue` | off | `queue=1` enables the queue display; requires a token |
 | `show_player_id` | off | `show_player_id=1` adds a selectable ID badge |
-| `token` | unset | MA access token for on-page controls and queue access |
+| `#token=<ma-access-token>` | unset | URL fragment carrying the MA access token for controls and queue access |
 | `device_id` | stored browser identity | Explicit identity for this browser player |
 | `ma_url` | stored value, if any | MA web interface address saved by the kiosk |
 | `sendspin_url` | same host, port `8927` | Override the Sendspin connection address |
@@ -79,13 +79,15 @@ Examples (replace the host and token):
 ```text
 http://192.168.10.10:8098/kiosk
 http://192.168.10.10:8098/kiosk?sendspin=0
-http://192.168.10.10:8098/kiosk?controls=1&queue=1&token=<ma-access-token>
+http://192.168.10.10:8098/kiosk?controls=1&queue=1#token=<ma-access-token>
 http://192.168.10.10:8098/kiosk?party=1&viz=1&lyrics=1&show_player_id=1
 ```
 
 Use a different `device_id` for each simultaneous player. Clearing browser
-storage or changing the browser profile creates a new identity. Tokens supplied
-in player URLs are also stored by the kiosk browser; treat those URLs as credentials.
+storage or changing the browser profile creates a new identity. The builder puts tokens
+in URL fragments so they are not sent in HTTP requests. The page stores the token
+and removes it from the visible address; treat copied URLs as credentials. Legacy
+query-string tokens are still accepted and cleared when the page loads.
 
 ### Protect the builder
 
@@ -102,7 +104,7 @@ not grant the player page access to playback controls: supply its token separate
 | Key | Default | Description |
 |-----|---------|-------------|
 | `http_port` | `8098` | Port for the embedded kiosk HTTP server |
-| `player_idle_timeout` | `30` | Unregister idle players after this many minutes |
+| `player_idle_timeout` | `30` | Unregister disconnected idle players after this many minutes |
 | `show_stop_notification` | `false` | Ask for confirmation before closing playback |
 | `enable_sendspin_bridge` | `true` | Enable experimental Sendspin integration |
 | `url_builder_require_auth` | `false` | Require MA sign-in for the builder and player list |

@@ -9,8 +9,10 @@ const sdkSource = await readFile(new URL('../../provider/static/web/sendspin-js/
 const html = await readFile(new URL('../../provider/static/web/index.html', import.meta.url), 'utf8');
 const elementIds = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]));
 
-async function startKiosk(search, entries = [], randomUUID, partyState = {}) {
+async function startKiosk(search, entries = [], randomUUID, partyState = {}, options = {}) {
     const storage = new Map(entries);
+    const frames = [];
+    let now = 1000;
     const sockets = [];
     const socketInstances = [];
     const apiCalls = [];
@@ -30,7 +32,12 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}) {
                 contains(name) { return classes.has(name); },
             },
             style: { setProperty(name, value) { this[name] = value; } },
-            dataset: {}, attributes: new Map(), textContent: '', innerHTML: '', value: '',
+            dataset: {}, attributes: new Map(), textContent: '', value: '', children: [],
+            appendChild(child) { this.children.push(child); return child; },
+            replaceChildren(...children) { this.children = children; this._markup = ''; this.textContent = ''; },
+            get childElementCount() { return this.children.length; },
+            set innerHTML(value) { this._markup = value; this.children = []; },
+            get innerHTML() { return this._markup || this.textContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); },
             addEventListener() {}, removeEventListener() {}, focus() {},
             setAttribute(name, value) { this.attributes.set(name, String(value)); },
             removeAttribute(name) { this.attributes.delete(name); if (name === 'src') delete this.src; },
@@ -39,9 +46,11 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}) {
         };
     };
     const elements = new Map();
+    const config = options;
     const context = createContext({
         URL, URLSearchParams, Blob, TextEncoder, TextDecoder, atob, btoa, console,
-        location: { search, protocol: 'http:', host: '192.0.2.10:8098' },
+        location: { search, hash: options.hash || '', pathname: '/kiosk', protocol: 'http:', host: '192.0.2.10:8098' },
+        history: { replaceState(_state, _title, url) { const target = new URL(url, 'http://192.0.2.10:8098'); context.location.search = target.search; context.location.hash = target.hash; } },
         crypto: { getRandomValues: webcrypto.getRandomValues.bind(webcrypto), randomUUID },
         localStorage: {
             getItem(key) { return storage.get(key) ?? null; },
@@ -75,16 +84,29 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}) {
         fetch: async (url, options) => {
             fetchCalls.push(url);
             if (url === '/api/party') return { ok: partyState.ok !== false, json: async () => partyState.info || {} };
-            if (url === '/api' && options?.body) apiCalls.push(JSON.parse(options.body));
+            if (url === '/api' && options?.body) {
+                const request = JSON.parse(options.body);
+                apiCalls.push(request);
+                if (config.api) return { ok: true, json: async () => config.api(request) };
+            }
             return { ok: true, json: async () => ({}) };
         },
         setInterval(callback, delay) { intervals.push({ callback, delay }); }, setTimeout() {}, clearTimeout() {},
-        requestAnimationFrame() {}, cancelAnimationFrame() {},
-        performance: { now: () => 0 },
+        requestAnimationFrame(callback) { frames.push(callback); return frames.length; }, cancelAnimationFrame() {},
+        performance: { now: () => now },
     });
     context.window = context;
     context.addEventListener = () => {};
-    const sdk = new SourceTextModule(sdkSource, { context });
+    const fakeSdk = `
+        export function loadSendspinClientIdentity() { return { clientId: 'a'.repeat(43) }; }
+        export class SendspinPlayer {
+            constructor(config) { this.config = config; this.core = {}; }
+            get trackProgress() { return this.core.trackProgress; }
+            unlock() { return Promise.resolve(); }
+            connect() { return Promise.resolve(); }
+        }
+    `;
+    const sdk = new SourceTextModule(options.fakeSdk ? fakeSdk : sdkSource, { context });
     await sdk.link(specifier => { throw new Error(`Unexpected SDK import: ${specifier}`); });
     await sdk.evaluate();
     let startupError;
@@ -96,7 +118,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}) {
         startupError = error;
     }
     await new Promise(resolve => setImmediate(resolve));
-    return { sockets, socketInstances, storage, startupError, elements, apiCalls, intervals, documentEvents, fetchCalls, root: context.document.documentElement, location: context.location };
+    return { sockets, socketInstances, storage, startupError, elements, apiCalls, intervals, documentEvents, fetchCalls, root: context.document.documentElement, location: context.location, context, frames, advance: ms => { now += ms; } };
 }
 
 for (const search of ['?kiosk=1', '?kiosk=1&sendspin=1']) {
@@ -309,4 +331,106 @@ test('Sendspin navigation retains selected kiosk additions', async () => {
     assert.equal(url.searchParams.get('party'), '1');
     assert.equal(url.searchParams.get('show_player_id'), '1');
     assert.equal(url.searchParams.get('device_id'), 'chosen');
+});
+
+
+test('fragment token is stored and removed from the visible player URL', async () => {
+    const result = await startKiosk('?sendspin=0&controls=1', [], undefined, {}, { hash: '#token=secret-token' });
+    assert.equal(result.storage.get('wk_token'), 'secret-token');
+    assert.equal(result.location.hash, '');
+    const message = data => result.socketInstances[0].onmessage({ data: JSON.stringify(data) });
+    message({ type: 'welcome', player_id: 'wk-fragment' });
+    result.elements.get('k-next').onclick();
+    assert.equal(result.apiCalls.at(-1).command, 'players/cmd/next');
+    message({ type: 'sendspin', url: '/kiosk?sendspin=1' });
+    assert.equal(new URL(result.location.href).searchParams.has('token'), false);
+});
+
+
+test('builder puts credentials in the fragment instead of the request query', async () => {
+    const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
+    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'ma_url', 'token', 'device_id'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
+    nodes.get('url').dataset.base = 'http://192.0.2.10:8098';
+    nodes.get('token').value = 'secret & token';
+    runInContext(builder, createContext({
+        URL, URLSearchParams, navigator: {}, window: { open() {} },
+        document: {
+            getElementById: id => nodes.get(id),
+            querySelector: () => ({ value: 'sendspin' }),
+            addEventListener() {},
+        },
+    }));
+    const url = new URL(nodes.get('url').value);
+    assert.equal(url.searchParams.has('token'), false);
+    assert.equal(new URLSearchParams(url.hash.slice(1)).get('token'), 'secret & token');
+});
+
+
+test('queue artwork is an inert DOM attribute even with quotes in metadata', async () => {
+    const image = '/cover.jpg" onerror="alert(1)';
+    const result = await startKiosk('?sendspin=0&queue=1&token=test', [], undefined, {}, {
+        api: request => request.command === 'player_queues/get_active_queue'
+            ? { queue_id: 'wk-queue', current_index: 0 }
+            : [{ media_item: { name: 'Track', image } }],
+    });
+    result.socketInstances[0].onmessage({ data: JSON.stringify({ type: 'welcome', player_id: 'wk-queue' }) });
+    await new Promise(resolve => setImmediate(resolve));
+    const queue = result.elements.get('kiosk-queue');
+    assert.equal(queue.innerHTML.includes('onerror='), false);
+    assert.equal(queue.children[0].children[0].src, image);
+    assert.equal(queue.children[0].children[0].attributes.has('onerror'), false);
+});
+
+
+test('long queue keeps the current item visible beyond the first 200 entries', async () => {
+    const items = Array.from({ length: 450 }, (_, i) => ({ name: 'Track ' + i }));
+    const result = await startKiosk('?sendspin=0&queue=1&token=test', [], undefined, {}, {
+        api: request => request.command === 'player_queues/get_active_queue'
+            ? { queue_id: 'wk-long', current_index: 350 }
+            : items.slice(request.args.offset || 0, (request.args.offset || 0) + request.args.limit),
+    });
+    result.socketInstances[0].onmessage({ data: JSON.stringify({ type: 'welcome', player_id: 'wk-long' }) });
+    await new Promise(resolve => setImmediate(resolve));
+    const active = result.elements.get('kiosk-queue').children.find(row => row.classList.contains('active'));
+    assert.ok(active, 'Current item is absent from the displayed queue');
+    assert.equal(active.children[0].children[0].textContent, 'Track 350');
+});
+
+
+for (const search of ['?lyrics=1', '?lyrics=1&token=test']) {
+    test(`Sendspin lyrics follow SDK progress without a visible queue (${search})`, async () => {
+        const result = await startKiosk(search, [], undefined, {}, { fakeSdk: true });
+        const message = data => result.socketInstances[0].onmessage({ data: JSON.stringify(data) });
+        message({ type: 'welcome', player_id: 'wk-clock' });
+        await new Promise(resolve => setImmediate(resolve));
+        message({ type: 'play', path: '/track', title: 'Track', duration: 180 });
+        const core = result.context.__sendspinPlayer.core;
+        core.onStreamStart();
+        core.trackProgress = { positionMs: 65000, durationMs: 180000, playbackSpeed: 1 };
+        message({ type: 'lyrics', lines: [{ t: 0, text: 'Opening' }, { t: 60, text: 'Middle' }, { t: 90, text: 'Ending' }] });
+        result.frames.at(-1)();
+        assert.match(result.elements.get('kiosk-lyrics').innerHTML, /class="l current">Middle</);
+        core.trackProgress = { positionMs: 95000, durationMs: 180000, playbackSpeed: 1 };
+        result.frames.at(-1)();
+        assert.match(result.elements.get('kiosk-lyrics').innerHTML, /class="l current">Ending</);
+        assert.equal(result.apiCalls.some(call => call.command === 'player_queues/get_active_queue'), false);
+    });
+}
+
+
+test('Sendspin clock follows SDK progress again after seeking without a queue', async () => {
+    const result = await startKiosk('?controls=1&token=test', [], undefined, {}, { fakeSdk: true });
+    const message = data => result.socketInstances[0].onmessage({ data: JSON.stringify(data) });
+    message({ type: 'welcome', player_id: 'wk-seek' });
+    await new Promise(resolve => setImmediate(resolve));
+    message({ type: 'play', path: '/track', duration: 180 });
+    const core = result.context.__sendspinPlayer.core;
+    core.onStreamStart();
+    const slider = result.elements.get('kiosk-seek');
+    slider.onchange({ target: { value: '500' } });
+    assert.equal(result.elements.get('kiosk-time').textContent, '1:30');
+    core.trackProgress = { positionMs: 95000, durationMs: 180000, playbackSpeed: 1 };
+    result.advance(2500);
+    result.intervals.find(interval => interval.delay === 500).callback();
+    assert.equal(result.elements.get('kiosk-time').textContent, '1:35');
 });
