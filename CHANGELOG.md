@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Kiosk playback controls follow the Music Assistant player bar design, with track details, matching icons, responsive layout and a volume panel.
+- Narrow screens use a floating mobile player card with Play/Pause, inline volume and a seek bar; short screens place artwork beside track details.
 
 ## [1.0.5] - 2026-10-13
 

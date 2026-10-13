@@ -82,32 +82,63 @@ html:not(.controls) #kiosk-controls { display:block; background:transparent; box
 html:not(.controls) #kiosk-bar-track, html:not(.controls) #kiosk-transport, html:not(.controls) #kiosk-volume-control { display:none; }
 html:not(.controls) #kiosk-progress { width:min(70vw,640px); margin:auto; }
 @media (max-width:768px) {
-  :root { --kiosk-bar-height:calc(156px + env(safe-area-inset-bottom,0px)); }
-  #kiosk-controls { grid-template-columns:minmax(0,1fr) auto; grid-template-rows:48px 32px 40px; gap:4px 8px; padding-top:12px; padding-bottom:calc(12px + env(safe-area-inset-bottom,0px)); }
+  :root { --kiosk-bar-height:calc(132px + env(safe-area-inset-bottom,0px)); }
+  html.controls #kiosk-controls {
+    inset:auto max(12px,env(safe-area-inset-right,0px)) calc(12px + env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px));
+    height:96px; grid-template-columns:minmax(0,1fr) 44px;
+    grid-template-rows:48px 28px; gap:0 8px; padding:10px 12px;
+    border-radius:16px; background:linear-gradient(110deg,#26313d,var(--ma-surface));
+    box-shadow:0 2px 8px rgba(0,0,0,.2); opacity:1; pointer-events:auto;
+  }
   #kiosk-bar-track { grid-column:1; grid-row:1; gap:10px; }
   #kiosk-bar-artbox { width:40px; height:40px; }
   #kiosk-bar-title { font-size:13px; }
   #kiosk-bar-artist { font-size:11px; }
   #kiosk-player-center { display:contents; }
   #kiosk-transport { grid-column:2; grid-row:1; height:48px; }
-  .kiosk-control { width:40px; height:44px; opacity:1; }
-  #k-play { width:40px; height:40px; background:transparent; color:#fff; border:2px solid currentColor; }
+  .kiosk-control { width:44px; height:44px; opacity:1; }
+  #k-prev, #k-next { display:none; }
+  #k-play { width:40px; height:40px; margin:0; background:transparent; color:rgba(255,255,255,.82); border:2px solid currentColor; }
   #k-play .kiosk-icon { width:18px; height:18px; }
   #k-play:hover { background:transparent; color:var(--ma-primary); }
-  #kiosk-progress { grid-column:1/-1; grid-row:2; }
-  #kiosk-time-labels { height:12px; line-height:12px; margin-top:-4px; }
-  #kiosk-volume-control { grid-column:1/-1; grid-row:3; }
+  html.controls #kiosk-progress { position:absolute; top:-24px; left:12px; right:12px; width:auto; }
+  html.controls #kiosk-time-labels { display:none; }
+  #kiosk-volume-control { grid-column:1/-1; grid-row:2; }
   #k-volume-button { display:none; }
   #kiosk-volume-panel, #kiosk-controls[data-volume-open="true"] #kiosk-volume-panel { display:block; position:static; padding:0; width:100%; max-width:none; border:0; background:transparent; box-shadow:none; }
   .volume-panel-heading { display:none; }
   .volume-range-row { gap:10px; }
+  #kiosk-volume { height:28px; }
+  #k-volume-panel-level { flex-shrink:0; }
   .kiosk-slider::-webkit-slider-thumb { opacity:1; }
   .kiosk-slider::-moz-range-thumb { opacity:1; }
+  #kiosk-player-id { max-width:calc(100vw - 32px); font-size:10px; top:max(8px,env(safe-area-inset-top,0px)); }
+  #kiosk-sync { top:44px; }
+  #kiosk-pair, #kiosk-status { top:78px; }
+  #kiosk-center { padding:72px 16px 16px; gap:10px; }
+  #kiosk-title, #kiosk-artist { max-width:100%; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; overflow-wrap:anywhere; }
+  #kiosk-title { font-size:clamp(20px,5vw,32px); }
+  #kiosk-artist { font-size:clamp(14px,3.5vw,20px); }
+  #kiosk-lyrics { width:100%; }
+  #kiosk-queue { top:84px; max-height:18vh; }
+  body.kiosk:has(#kiosk-queue:not(.hidden)) #kiosk-center { padding-top:calc(84px + 18vh); }
+  #kiosk-party img { width:80px; height:80px; }
+  #kiosk-party .name { max-width:100px; font-size:11px; overflow-wrap:anywhere; }
 }
 @media (max-height:500px) {
   #kiosk-center { gap:8px; padding:16px; }
   #kiosk-artbox { width:min(30vh,36vw); max-height:30vh; }
   #kiosk-title { font-size:22px; }
   #kiosk-artist { font-size:15px; }
+}
+@media (max-width:768px) and (max-height:500px) {
+  #kiosk-center { display:grid; grid-template-columns:min(30vh,30vw) minmax(0,1fr); grid-template-rows:auto auto auto; align-content:center; gap:6px 16px; padding:56px 16px 12px; }
+  #kiosk-artbox { grid-column:1; grid-row:1/4; width:100%; max-height:none; }
+  #kiosk-title, #kiosk-artist, #kiosk-lyrics { grid-column:2; width:100%; text-align:left; }
+  #kiosk-title { grid-row:1; }
+  #kiosk-artist { grid-row:2; }
+  #kiosk-lyrics { grid-row:3; }
+  #kiosk-lyrics .l { font-size:12px; }
+  #kiosk-lyrics .l.current { font-size:15px; }
 }
 @media (prefers-reduced-motion:reduce) { #kiosk-controls, .kiosk-control { transition:none; } }
