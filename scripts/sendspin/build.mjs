@@ -9,6 +9,16 @@ const destination = path.resolve(root, '../../provider/static/web/sendspin-js');
 const packages = ['@sendspin/sendspin-js', '@noble/curves', '@noble/hashes', '@noble/ciphers'];
 const files = new Map();
 const versions = {};
+const licenses = [];
+
+for (const name of packages) {
+    const directory = path.join(root, 'node_modules', name);
+    const info = JSON.parse(await readFile(path.join(directory, 'package.json'), 'utf8'));
+    const license = (await readFile(path.join(directory, 'LICENSE'), 'utf8')).trimEnd();
+    if (license.includes('*/')) throw new Error(`License cannot be embedded in a JS comment: ${name}`);
+    versions[name] = info.version;
+    licenses.push(`${name}@${info.version}\n${license}`);
+}
 
 const result = await build({
     absWorkingDir: root,
@@ -20,7 +30,7 @@ const result = await build({
     target: 'es2022',
     minify: true,
     legalComments: 'none',
-    banner: { js: '/* Generated Sendspin SDK. Full licenses are in ./licenses/. */' },
+    banner: { js: `/*!\nGenerated Sendspin SDK: bundled and minified for Web Kiosk; software Opus omitted.\n\n${licenses.join('\n\n')}\n*/` },
     write: false,
     metafile: true,
     plugins: [{
@@ -41,13 +51,6 @@ for (const output of Object.values(result.metafile.outputs)) {
     if (output.imports.length) throw new Error('Sendspin bundle has unresolved imports');
 }
 files.set('index.js', result.outputFiles[0].contents);
-for (const name of packages) {
-    const directory = path.join(root, 'node_modules', name);
-    const info = JSON.parse(await readFile(path.join(directory, 'package.json'), 'utf8'));
-    versions[name] = info.version;
-    files.set(`licenses/${name.replace('@', '').replace('/', '-')}.txt`,
-        (await readFile(path.join(directory, 'LICENSE'), 'utf8')).trimEnd() + '\n');
-}
 const esbuild = JSON.parse(await readFile(path.join(root, 'node_modules/esbuild/package.json'), 'utf8'));
 files.set('VERSION.txt', `@sendspin/sendspin-js@${versions['@sendspin/sendspin-js']}\n`);
 files.set('BUILD.json', JSON.stringify({
@@ -55,6 +58,7 @@ files.set('BUILD.json', JSON.stringify({
     esbuild: esbuild.version,
     sha256: createHash('sha256').update(files.get('index.js')).digest('hex'),
     opusFallback: false,
+    licensePlacement: 'bundle-header',
 }, null, 2) + '\n');
 
 async function existingFiles(directory, prefix = '') {

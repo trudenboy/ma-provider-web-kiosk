@@ -28,6 +28,17 @@ function memoryStorage(entries = []) {
     };
 }
 
+test('bundle header retains complete licenses and attribution from npm packages', async () => {
+    const header = source.split('*/', 1)[0];
+    for (const name of ['@sendspin/sendspin-js', '@noble/curves', '@noble/hashes', '@noble/ciphers']) {
+        const directory = new URL(`node_modules/${name}/`, import.meta.url);
+        const info = JSON.parse(await readFile(new URL('package.json', directory), 'utf8'));
+        const license = (await readFile(new URL('LICENSE', directory), 'utf8')).trimEnd();
+        assert.ok(header.includes(`${name}@${info.version}`));
+        assert.ok(header.includes(license), `Incomplete license for ${name}`);
+    }
+});
+
 test('bundle loads without DOM or external imports and preserves an existing identity', async () => {
     const secret = Buffer.alloc(32, 7).toString('base64url');
     const pairingPsk = Buffer.alloc(32, 9).toString('base64url');
