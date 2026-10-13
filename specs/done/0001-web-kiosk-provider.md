@@ -2,7 +2,7 @@
 id: "0001"
 title: "Standalone Web Kiosk player provider"
 size: L
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 240
 feature_id:

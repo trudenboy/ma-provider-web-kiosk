@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.8] - 2026-10-14
+
+### Added
+
+- Click the Party QR to show it in the large artwork area; click again or press Escape to close it.
+- Idle players show their Player ID and the running Music Assistant version.
+- Provider settings can require Music Assistant sign-in for the kiosk URL builder.
+
+### Changed
+
+- Official HTML5 and Sendspin artwork replaces the ASCII project marks.
+- The canonical `/kiosk` URL opens Sendspin with additions disabled; the URL builder enables each addition, including Player ID, explicitly.
+- Project artwork also supplies the background when there is no track.
+
 ## [1.0.7] - 2026-10-13
 
 ### Changed
