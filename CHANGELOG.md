@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Official Music Assistant and Sendspin artwork replaces the ASCII project marks.
+- Official HTML5 and Sendspin artwork replaces the ASCII project marks.
 - The canonical `/kiosk` URL opens Sendspin with additions disabled; the URL builder enables each addition, including Player ID, explicitly.
 - Project artwork also supplies the background when there is no track.
 

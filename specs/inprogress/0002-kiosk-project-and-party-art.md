@@ -18,7 +18,7 @@ Use local official project SVGs as square placeholder artwork. Without a track, 
 
 ## Acceptance Criteria
 
-1. No ASCII mark remains; HTML5 uses the MA logo and Sendspin uses the Sendspin logo as idle artwork.
+1. No ASCII mark remains; HTML5 uses the W3C HTML5 logo and Sendspin uses the Sendspin logo as idle artwork.
 2. Idle hero and mini player labels show the Player ID and Music Assistant plus its server version; the optional standalone ID label is controlled independently.
 3. Track metadata and artwork replace idle content when media arrives; stop restores idle content.
 4. The welcome WebSocket payload carries the MA server version, without an API token.

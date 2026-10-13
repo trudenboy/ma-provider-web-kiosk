@@ -175,7 +175,7 @@ for (const search of ['?kiosk=1', '?kiosk=1&sendspin=1']) {
 }
 
 for (const [search, type, logo] of [
-    ['?kiosk=1&sendspin=0', 'HTML5', '/web/music-assistant.svg'],
+    ['?kiosk=1&sendspin=0', 'HTML5', '/web/html5.svg'],
     ['?kiosk=1&sendspin=1', 'Sendspin', '/web/sendspin.svg'],
 ]) {
     test(`idle ${type} player shows its ID, project artwork and the MA version`, async () => {
@@ -261,7 +261,7 @@ test('bare kiosk defaults to Sendspin without optional additions', async () => {
 
 test('idle project artwork supplies the same background image as the album artwork', async () => {
     const result = await startKiosk('?sendspin=0');
-    assert.equal(result.elements.get('kiosk-bg-img').src, '/web/music-assistant.svg');
+    assert.equal(result.elements.get('kiosk-bg-img').src, '/web/html5.svg');
     assert.equal(result.elements.get('kiosk-bg-img').style.opacity, '1');
 });
 

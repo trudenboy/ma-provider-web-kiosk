@@ -408,7 +408,7 @@
     }
     function renderNow() {
         var src = current.image ? imageUrl({ image: current.image }) : '';
-        var logo = SENDSPIN ? '/web/sendspin.svg' : '/web/music-assistant.svg';
+        var logo = SENDSPIN ? '/web/sendspin.svg' : '/web/html5.svg';
         var title = hasTrack ? current.title || '—' : playerId || 'Connecting…';
         var artist = hasTrack ? current.artist || '—' : 'Music Assistant' + (serverVersion ? ' ' + serverVersion : '');
         var box = document.getElementById('kiosk-artbox');
@@ -418,7 +418,7 @@
             box.classList.remove('has-art');
             clearImage(art);
             art.src = logo;
-            art.alt = SENDSPIN ? 'Sendspin' : 'Music Assistant';
+            art.alt = SENDSPIN ? 'Sendspin' : 'HTML5';
             box.classList.add('has-art', 'project-art');
             clearImage(bg);
             bg.src = logo;
