@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { createContext, runInContext, SourceTextModule } from 'node:vm';
+import { createContext, runInContext } from 'node:vm';
 
 const source = await readFile(new URL('../../provider/static/web/web.js', import.meta.url), 'utf8');
 const sdkSource = await readFile(new URL('../../provider/static/web/sendspin-js/index.js', import.meta.url), 'utf8');
@@ -18,8 +18,13 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
     const apiCalls = [];
     const intervals = [];
     const documentEvents = new Map();
+    const windowEvents = new Map();
+    const timers = [];
+    const wakeRequests = [];
     const fetchCalls = [];
     const audioInstances = [];
+    let sdkLoads = 0;
+    let activeElement = null;
     const node = () => {
         const classes = new Set();
         return {
@@ -34,34 +39,74 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
             },
             style: { setProperty(name, value) { this[name] = value; } },
             dataset: {}, attributes: new Map(), textContent: '', value: '', children: [],
-            appendChild(child) { this.children.push(child); return child; },
+            appendChild(child) { child.offsetTop = this.children.length * 80; child.offsetHeight = 64; this.children.push(child); return child; },
+            clientHeight: 400,
             replaceChildren(...children) { this.children = children; this._markup = ''; this.textContent = ''; },
+            removeChild(child) { this.children.splice(this.children.indexOf(child), 1); },
+            get firstChild() { return this.children[0] || null; },
             get childElementCount() { return this.children.length; },
             set innerHTML(value) { this._markup = value; this.children = []; },
             get innerHTML() { return this._markup || this.textContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); },
-            addEventListener() {}, removeEventListener() {}, focus() {},
+            addEventListener() {}, removeEventListener() {}, focus() { activeElement = this; },
+            click() { if (this.onclick) this.onclick(); },
+            getClientRects() { return this.classList.contains('hidden') ? [] : [this.getBoundingClientRect()]; },
+            getBoundingClientRect() { return this.rect || { left:0, top:0, width:40, height:40 }; },
             setAttribute(name, value) { this.attributes.set(name, String(value)); },
+            setAttributeNS(_namespace, name, value) { this.attributes.set(name, String(value)); },
             removeAttribute(name) { this.attributes.delete(name); if (name === 'src') delete this.src; },
             getAttribute(name) { return this.attributes.get(name) ?? this[name] ?? null; },
-            getContext() { return { clearRect() {} }; },
+            getContext() {
+                const element = this;
+                return { clearRect() { element.clears = (element.clears || 0) + 1; }, fillRect() {} };
+            },
         };
     };
     const elements = new Map();
     const config = options;
     const context = createContext({
         URL, URLSearchParams, Blob, TextEncoder, TextDecoder, atob, btoa, console,
-        location: { search, hash: options.hash || '', pathname: '/kiosk', protocol: 'http:', host: '192.0.2.10:8098' },
+        innerWidth: options.width || 390,
+        CSS: { supports:() => !options.noGrid },
+        location: { search, hash: options.hash || '', pathname: '/kiosk', protocol: options.protocol || 'http:', hostname:'192.0.2.10', host: '192.0.2.10:8098' },
+        isSecureContext: options.secure === true,
+        AudioContext: function () {},
+        AudioDecoder: options.opusSupported !== undefined ? { isConfigSupported: async () => ({ supported:options.opusSupported }) } : undefined,
+        OfflineAudioContext: class {
+            decodeAudioData() { return options.flacSupported ? Promise.resolve({ length:960 }) : Promise.reject(new Error('FLAC unavailable')); }
+        },
+        navigator: { userAgent:'Kiosk Chrome/108', platform:'', maxTouchPoints:0, onLine:true,
+            wakeLock: options.wakeLock ? { request: async type => {
+                wakeRequests.push(type);
+                if (options.wakeLock === 'reject') throw new Error('Wake lock denied');
+                return { released:false, addEventListener() {}, release:async () => {} };
+            } } : undefined },
         history: { replaceState(_state, _title, url) { const target = new URL(url, 'http://192.0.2.10:8098'); context.location.search = target.search; context.location.hash = target.hash; } },
-        crypto: { getRandomValues: webcrypto.getRandomValues.bind(webcrypto), randomUUID },
+        crypto: options.noCrypto ? undefined : { getRandomValues: webcrypto.getRandomValues.bind(webcrypto), randomUUID },
         localStorage: {
-            getItem(key) { return storage.get(key) ?? null; },
-            setItem(key, value) { storage.set(key, value); },
+            getItem(key) { if (options.storageDenied) throw new Error('Storage denied'); return storage.get(key) ?? null; },
+            setItem(key, value) { if (options.storageDenied) throw new Error('Storage denied'); storage.set(key, value); },
         },
         document: {
             documentElement: node(), body: node(),
+            hidden:false,
+            get activeElement() { return activeElement; },
+            head: { appendChild(script) {
+                sdkLoads++;
+                try { runInContext(options.fakeSdk ? fakeSdk : sdkSource, context); script.onload(); }
+                catch (error) { script.onerror(error); }
+            } },
             getElementById(id) {
                 if (!elementIds.has(id)) return null;
-                if (!elements.has(id)) elements.set(id, node());
+                if (!elements.has(id)) {
+                    const element = node();
+                    const tag = html.match(new RegExp(`<[^>]*\\bid="${id}"[^>]*>`))?.[0] || '';
+                    const classes = tag.match(/\bclass="([^"]*)"/)?.[1] || '';
+                    element.classList.add(...classes.split(/\s+/).filter(Boolean));
+                    element.tagName = tag.match(/^<(\w+)/)?.[1].toUpperCase() || 'DIV';
+                    element.id = id;
+                    if (options.noReplaceChildren) element.replaceChildren = undefined;
+                    elements.set(id, element);
+                }
                 return elements.get(id);
             },
             createElement: node,
@@ -75,8 +120,14 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
         Audio: class {
             constructor() { audioInstances.push(this); }
             paused = true;
+            _volume = 1;
+            get volume() { return this._volume; }
+            set volume(value) { if (!options.systemVolume) this._volume = value; }
             addEventListener() {}
-            play() { return Promise.reject(Object.assign(new Error('Gesture required'), { name: 'NotAllowedError' })); }
+            play() {
+                if (options.playAllowed?.()) { this.paused = false; return Promise.resolve(); }
+                return Promise.reject(Object.assign(new Error('Gesture required'), { name: 'NotAllowedError' }));
+            }
             pause() { this.paused = true; }
             removeAttribute(name) { delete this[name]; }
             getAttribute(name) { return this[name] ?? null; }
@@ -87,10 +138,12 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
             sent = [];
             constructor(url) { sockets.push(url); socketInstances.push(this); }
             send(data) { this.sent.push(JSON.parse(data)); }
+            close() { this.readyState = 3; if(this.onclose) this.onclose(); }
         },
         fetch: async (url, options) => {
             fetchCalls.push(url);
             if (url === '/api/party') return { ok: partyState.ok !== false, json: async () => partyState.info || {} };
+            if (url === '/web/flac-probe.flac') return { ok:true, arrayBuffer:async () => new ArrayBuffer(8) };
             if (url === '/api' && options?.body) {
                 const request = JSON.parse(options.body);
                 apiCalls.push(request);
@@ -98,35 +151,206 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
             }
             return { ok: true, json: async () => ({}) };
         },
-        setInterval(callback, delay) { intervals.push({ callback, delay }); }, setTimeout() {}, clearTimeout() {},
+        setInterval(callback, delay) { intervals.push({ callback, delay }); }, setTimeout(callback, delay) { timers.push({callback,delay}); return timers.length; }, clearTimeout() {},
         requestAnimationFrame(callback) { frames.push(callback); return frames.length; }, cancelAnimationFrame() {},
         performance: { now: () => now },
     });
     context.window = context;
-    context.addEventListener = () => {};
+    context.addEventListener = (type, callback) => {
+        if (!windowEvents.has(type)) windowEvents.set(type, []);
+        windowEvents.get(type).push(callback);
+    };
     const fakeSdk = `
-        export function loadSendspinClientIdentity() { return { clientId: 'a'.repeat(43) }; }
-        export class SendspinPlayer {
-            constructor(config) { this.config = config; this.core = {}; }
+        window.WebKioskSendspin = {
+        loadSendspinClientIdentity: function(storage) {
+            var id = storage && storage.getItem('fake-identity');
+            if (!id) { id = 'hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo'; if(storage) storage.setItem('fake-identity', id); }
+            return { clientId:id };
+        },
+        SendspinPlayer: class {
+            constructor(config) { this.config = config; this.core = {}; this.clientId = config.storage && config.storage.getItem('fake-identity') || 'b'.repeat(43); }
             get trackProgress() { return this.core.trackProgress; }
-            unlock() { return Promise.resolve(); }
-            connect() { return Promise.resolve(); }
-        }
+            unlock() { this.unlocks = (this.unlocks || 0) + 1; return Promise.resolve(); }
+            connect() { this.isConnected = true; return Promise.resolve(); }
+            disconnect() { this.disconnected = true; }
+            setVolume(value) { this.volume = value; }
+        }};
     `;
-    const sdk = new SourceTextModule(options.fakeSdk ? fakeSdk : sdkSource, { context });
-    await sdk.link(specifier => { throw new Error(`Unexpected SDK import: ${specifier}`); });
-    await sdk.evaluate();
     let startupError;
     try {
-        runInContext(source, context, {
-            importModuleDynamically: async () => sdk,
-        });
+        runInContext(source, context);
     } catch (error) {
         startupError = error;
     }
     await new Promise(resolve => setImmediate(resolve));
-    return { sockets, socketInstances, storage, startupError, elements, apiCalls, intervals, documentEvents, fetchCalls, root: context.document.documentElement, location: context.location, context, frames, audioInstances, advance: ms => { now += ms; } };
+    return { sockets, socketInstances, storage, startupError, elements, apiCalls, intervals, documentEvents, windowEvents, timers, wakeRequests, fetchCalls, sdkLoads, root: context.document.documentElement, location: context.location, context, frames, audioInstances, advance: ms => { now += ms; }, resize: width => { context.innerWidth = width; (windowEvents.get('resize') || []).forEach(callback => callback()); } };
 }
+
+test('HTML5 registers without crypto or loading Sendspin', async () => {
+    const result = await startKiosk('?sendspin=0', [], undefined, {}, { fakeSdk: true, noCrypto: true });
+    assert.equal(result.startupError, undefined);
+    assert.equal(result.sockets.length, 1);
+    assert.equal(result.sdkLoads, 0);
+    assert.match(result.storage.get('wk_device_id'), /^wk-/);
+});
+
+for (const type of ['touchstart', 'mousedown']) {
+    test(`${type} activates HTML5 audio without Pointer Events`, async () => {
+        let allowed = false;
+        const result = await startKiosk('?sendspin=0', [], undefined, {}, { playAllowed: () => allowed });
+        allowed = true;
+        for (const callback of result.documentEvents.get(type) || []) callback({ type });
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(result.audioInstances[0].paused, false);
+        assert.equal(result.elements.get('kiosk-status').classList.contains('audio-prompt'), false);
+    });
+}
+
+test('remote arrows move focus, Enter clicks and legacy Back closes QR', async () => {
+    const result = await startKiosk('?sendspin=0&controls=1&remote=1&party=1&token=test', [], undefined,
+        { info: { active: true, version: 'one' } });
+    result.socketInstances[0].onmessage({ data: JSON.stringify({ type: 'welcome', player_id: 'wk-remote' }) });
+    const prev = result.elements.get('k-prev');
+    const play = result.elements.get('k-play');
+    const next = result.elements.get('k-next');
+    prev.disabled = play.disabled = next.disabled = false;
+    prev.rect = { left:0, top:100, width:40, height:40 };
+    play.rect = { left:100, top:100, width:40, height:40 };
+    next.rect = { left:200, top:100, width:40, height:40 };
+    play.focus();
+    const key = (key, keyCode) => {
+        const event = { key, keyCode, target: result.context.document.activeElement, preventDefault() {}, stopPropagation() {} };
+        for (const callback of result.documentEvents.get('keydown')) callback(event);
+    };
+    key('ArrowRight');
+    assert.equal(result.context.document.activeElement, next);
+    assert.equal(result.elements.get('kiosk-controls').classList.contains('visible'), true);
+    key('Enter');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(result.apiCalls.at(-1).command, 'players/cmd/next');
+    const party = result.elements.get('kiosk-party');
+    party.onclick();
+    key('Unidentified', 10009);
+    assert.equal(party.attributes.get('aria-expanded'), 'false');
+});
+
+test('denied persistent storage keeps one identity for registration and Sendspin', async () => {
+    const result = await startKiosk('', [], undefined, {}, { fakeSdk:true, storageDenied:true });
+    result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'welcome', player_id:'wk-storage' }) });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(result.context.__sendspinPlayer.clientId,
+        new URL(result.sockets[0]).searchParams.get('sendspin_client_id'));
+});
+
+for (const [opusSupported, flacSupported, expected] of [
+    [false, false, ['pcm']], [true, false, ['opus', 'pcm']], [false, true, ['flac', 'pcm']],
+]) {
+    test(`Sendspin advertises only verified codecs (${expected.join(',')})`, async () => {
+        const result = await startKiosk('', [], undefined, {}, { fakeSdk:true, secure:true, opusSupported, flacSupported });
+        result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'welcome', player_id:'wk-codecs' }) });
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(Array.from(result.context.__sendspinPlayer.config.codecs), expected);
+    });
+}
+
+test('missing Sendspin capabilities selects HTML5 before loading the SDK', async () => {
+    const result = await startKiosk('', [], undefined, {}, { noCrypto:true, fakeSdk:true });
+    assert.equal(result.sockets.length, 1);
+    assert.equal(result.sdkLoads, 0);
+    assert.equal(result.elements.get('kiosk-art').src, '/web/html5.svg');
+});
+
+test('HTTPS without a secure Sendspin endpoint selects HTML5', async () => {
+    const result = await startKiosk('', [], undefined, {}, { protocol:'https:', fakeSdk:true });
+    assert.equal(result.sdkLoads, 0);
+    assert.equal(new URL(result.sockets[0]).protocol, 'wss:');
+    assert.equal(result.elements.get('kiosk-art').src, '/web/html5.svg');
+});
+
+test('HTML5 exposes device volume when media-element volume is not writable', async () => {
+    const result = await startKiosk('?sendspin=0&controls=1&token=test', [], undefined, {}, { systemVolume:true });
+    assert.equal(result.elements.get('kiosk-volume').disabled, true);
+    assert.equal(result.elements.get('k-volume-level').textContent, 'Device');
+});
+
+for (const receivedAudio of [false, true]) test(`initial Sendspin audio watchdog respects decoded buffers (${receivedAudio})`, async () => {
+    const result = await startKiosk('', [], undefined, {}, { fakeSdk:true });
+    result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'welcome', player_id:'wk-audio' }) });
+    await new Promise(resolve => setImmediate(resolve));
+    const player = result.context.__sendspinPlayer;
+    player.core.onStreamStart();
+    if (receivedAudio) player.core.onAudioData({ samples:[] });
+    result.advance(11000);
+    for (const interval of result.intervals.filter(item => item.delay === 1000)) interval.callback();
+    assert.equal(player.disconnected === true, !receivedAudio);
+    assert.equal(result.elements.get('kiosk-art').src, receivedAudio ? '/web/sendspin.svg' : '/web/html5.svg');
+});
+
+test('Sendspin receives volume through its own public player API', async () => {
+    const result = await startKiosk('', [], undefined, {}, { fakeSdk:true, systemVolume:true });
+    const message = data => result.socketInstances[0].onmessage({ data:JSON.stringify(data) });
+    message({ type:'welcome', player_id:'wk-volume' });
+    await new Promise(resolve => setImmediate(resolve));
+    result.context.__sendspinPlayer.core.onStreamStart();
+    message({ type:'volume', level:42 });
+    assert.equal(result.context.__sendspinPlayer.volume, 42);
+});
+
+test('online recovery reconnects once and ignores stale socket close callbacks', async () => {
+    const result = await startKiosk('?sendspin=0');
+    const previous = result.socketInstances[0];
+    previous.close();
+    for (const callback of result.windowEvents.get('online') || []) callback({type:'online'});
+    assert.equal(result.socketInstances.length, 2);
+    previous.onclose();
+    for (const timer of result.timers.filter(timer => timer.delay === 2000)) timer.callback();
+    assert.equal(result.socketInstances.length, 2);
+});
+
+test('optional wake lock reacquires after visibility changes without breaking startup', async () => {
+    const result = await startKiosk('?sendspin=0&wake_lock=1', [], undefined, {}, { wakeLock:true });
+    assert.deepEqual(result.wakeRequests, ['screen']);
+    result.context.document.hidden = true;
+    for (const callback of result.documentEvents.get('visibilitychange') || []) callback();
+    result.context.document.hidden = false;
+    for (const callback of result.documentEvents.get('visibilitychange') || []) callback();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(result.wakeRequests, ['screen', 'screen']);
+    assert.equal(result.socketInstances.length, 1);
+});
+
+test('denied wake lock still registers the player', async () => {
+    const result = await startKiosk('?sendspin=0&wake_lock=1', [], undefined, {}, { wakeLock:'reject' });
+    assert.equal(result.socketInstances.length, 1);
+    assert.equal(result.startupError, undefined);
+    assert.deepEqual(result.wakeRequests, ['screen']);
+});
+
+test('visible page resumes the Sendspin audio context through the public SDK', async () => {
+    const result = await startKiosk('', [], undefined, {}, { fakeSdk:true });
+    result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'welcome', player_id:'wk-resume' }) });
+    await new Promise(resolve => setImmediate(resolve));
+    const player = result.context.__sendspinPlayer;
+    player.core.onStreamStart();
+    const before = player.unlocks;
+    for (const callback of result.documentEvents.get('visibilitychange')) callback();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(player.unlocks, before + 1);
+});
+
+test('lightweight visualizer limits canvas redraw work during rapid animation frames', async () => {
+    const result = await startKiosk('?sendspin=0&viz=1&lite=1');
+    const message = data => result.socketInstances[0].onmessage({ data:JSON.stringify(data) });
+    message({ type:'welcome', player_id:'wk-lite' });
+    message({ type:'play', path:'/track', duration:180 });
+    message({ type:'wave', bins:[1, 1, 1] });
+    const canvas = result.elements.get('kiosk-viz');
+    const before = canvas.clears;
+    for (let i = 0; i < 100; i++) { result.advance(10); result.frames.at(-1)(); }
+    assert.ok(canvas.clears - before <= 16);
+    assert.ok(canvas.clears - before >= 10);
+    assert.equal(result.root.classList.contains('lite'), true);
+});
 
 for (const search of ['?kiosk=1', '?kiosk=1&sendspin=1']) {
     test(`fresh kiosk registers over HTTP without crypto.randomUUID (${search})`, async () => {
@@ -225,6 +449,39 @@ for (const [search, type, logo] of [
     });
 }
 
+for (const [search, logo] of [['?sendspin=0', '/web/html5.svg'], ['', '/web/sendspin.svg']]) {
+    test(`bottom-left artwork stays a project emblem without Party (${search})`, async () => {
+        const result = await startKiosk(search);
+        const message = data => result.socketInstances[0].onmessage({ data: JSON.stringify(data) });
+        message({ type: 'welcome', player_id: 'wk-logo' });
+        message({ type: 'play', path: '/track', title: 'Track', image_url: '/album.jpg', duration: 180 });
+        assert.equal(result.elements.get('kiosk-bar-art').src, logo);
+        assert.equal(result.elements.get('kiosk-party').classList.contains('hidden'), true);
+        assert.equal(result.elements.get('kiosk-art').src.includes('album.jpg'), true);
+    });
+}
+
+test('Party thumbnail falls back to the emblem on a failed QR and recovers on the next poll', async () => {
+    const state = { info: { active: true, version: 'one', name: 'Room' } };
+    const result = await startKiosk('?sendspin=0&party=1', [], undefined, state);
+    const thumbnail = result.elements.get('kiosk-party-thumbnail');
+    const party = result.elements.get('kiosk-party');
+    assert.equal(thumbnail.src, '/api/party/qr.svg?v=one');
+    assert.equal(party.classList.contains('hidden'), false);
+    assert.equal(result.elements.get('kiosk-bar-art').src, '/web/html5.svg');
+    party.onclick();
+    thumbnail.onerror();
+    assert.equal(party.classList.contains('hidden'), true);
+    assert.equal(party.attributes.get('aria-expanded'), 'false');
+    const poll = result.intervals.find(interval => interval.delay === 10000).callback;
+    await poll();
+    assert.equal(party.classList.contains('hidden'), false);
+    state.info = { active: false };
+    await poll();
+    assert.equal(party.classList.contains('hidden'), true);
+    assert.equal(result.elements.get('kiosk-bar-art').src, '/web/html5.svg');
+});
+
 test('Party QR toggles the large artwork without losing current track updates', async () => {
     const partyState = { info: { active: true, version: 'one', name: 'Party' } };
     const result = await startKiosk('?kiosk=1&token=test&party=1', [], undefined, partyState);
@@ -296,7 +553,7 @@ test('idle project artwork supplies the same background image as the album artwo
 
 test('URL builder emits a clean kiosk URL and only selected additions', async () => {
     const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
-    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'ma_url', 'token', 'device_id'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
+    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'lite', 'wake_lock', 'ma_url', 'token', 'device_id', 'sendspin_url'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
     nodes.get('url').dataset.base = 'http://192.168.10.10:8098';
     let mode = 'sendspin';
     const events = new Map();
@@ -356,7 +613,7 @@ test('fragment token is stored and removed from the visible player URL', async (
 
 test('builder puts credentials in the fragment instead of the request query', async () => {
     const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
-    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'ma_url', 'token', 'device_id'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
+    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'lite', 'wake_lock', 'ma_url', 'token', 'device_id', 'sendspin_url'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
     nodes.get('url').dataset.base = 'http://192.0.2.10:8098';
     nodes.get('token').value = 'secret & token';
     runInContext(builder, createContext({
@@ -404,6 +661,43 @@ test('long queue keeps the current item visible beyond the first 200 entries', a
 });
 
 
+test('wide lyrics show the full song without replaceChildren and follow viewport changes', async () => {
+    const result = await startKiosk('?lyrics=1', [], undefined, {}, { fakeSdk: true, width: 1280, noReplaceChildren: true });
+    const message = data => result.socketInstances[0].onmessage({ data: JSON.stringify(data) });
+    message({ type: 'welcome', player_id: 'wk-lyrics' });
+    await new Promise(resolve => setImmediate(resolve));
+    message({ type: 'play', path: '/track', title: 'Track', duration: 180 });
+    const core = result.context.__sendspinPlayer.core;
+    core.onStreamStart();
+    core.trackProgress = { positionMs: 65000, durationMs: 180000, playbackSpeed: 1 };
+    message({ type: 'lyrics', lines: [{ t: 0, text: 'Opening' }, { t: 20, text: 'Verse' }, { t: 60, text: 'Middle' }, { t: 90, text: 'Ending' }, { t: 120, text: '<Outro>' }] });
+    const lyrics = result.elements.get('kiosk-lyrics');
+    assert.equal(lyrics.dataset.layout, 'wide');
+    assert.deepEqual(Array.from(lyrics.children[0].children, line => line.textContent), ['Opening', 'Verse', 'Middle', 'Ending', '<Outro>']);
+    assert.equal(lyrics.children[0].children[2].classList.contains('current'), true);
+    assert.equal(lyrics.children[0].style.transform, 'translateY(8px)');
+    core.trackProgress.positionMs = 95000;
+    result.frames.at(-1)();
+    assert.equal(lyrics.children[0].children[3].classList.contains('current'), true);
+    assert.equal(lyrics.children[0].style.transform, 'translateY(-72px)');
+    result.resize(768);
+    assert.equal(lyrics.dataset.layout, 'compact');
+    assert.match(lyrics.innerHTML, /^<div class="l">Middle<\/div><div class="l current">Ending<\/div><div class="l">&lt;Outro&gt;<\/div>$/);
+    result.resize(769);
+    assert.equal(lyrics.dataset.layout, 'wide');
+    assert.equal(lyrics.children[0].children[3].classList.contains('current'), true);
+    message({ type: 'lyrics', lines: [] });
+    assert.equal(lyrics.classList.contains('hidden'), true);
+    assert.equal(result.root.classList.contains('lyrics-visible'), false);
+});
+
+test('a legacy browser without Grid keeps compact lyrics even on a wide screen', async () => {
+    const result = await startKiosk('?sendspin=0&lyrics=1', [], undefined, {}, { width:1280, noGrid:true });
+    result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'lyrics', lines:[{ t:0, text:'Legacy line' }] }) });
+    assert.equal(result.elements.get('kiosk-lyrics').dataset.layout, 'compact');
+    assert.match(result.elements.get('kiosk-lyrics').innerHTML, /Legacy line/);
+});
+
 for (const search of ['?lyrics=1', '?lyrics=1&token=test']) {
     test(`Sendspin lyrics follow SDK progress without a visible queue (${search})`, async () => {
         const result = await startKiosk(search, [], undefined, {}, { fakeSdk: true });
@@ -418,6 +712,7 @@ for (const search of ['?lyrics=1', '?lyrics=1&token=test']) {
         result.frames.at(-1)();
         assert.match(result.elements.get('kiosk-lyrics').innerHTML, /class="l current">Middle</);
         core.trackProgress = { positionMs: 95000, durationMs: 180000, playbackSpeed: 1 };
+        result.advance(100);
         result.frames.at(-1)();
         assert.match(result.elements.get('kiosk-lyrics').innerHTML, /class="l current">Ending</);
         assert.equal(result.apiCalls.some(call => call.command === 'player_queues/get_active_queue'), false);
@@ -437,6 +732,7 @@ test('Sendspin clock follows SDK progress again after seeking without a queue', 
     slider.onchange({ target: { value: '500' } });
     assert.equal(result.elements.get('kiosk-time').textContent, '1:30');
     core.trackProgress = { positionMs: 95000, durationMs: 180000, playbackSpeed: 1 };
+        result.advance(100);
     result.advance(2500);
     result.intervals.find(interval => interval.delay === 500).callback();
     assert.equal(result.elements.get('kiosk-time').textContent, '1:35');
