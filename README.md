@@ -74,7 +74,6 @@ read-only **Kiosk URL** setting also contains the base player URL.
 | `wake_lock` | off | `wake_lock=1` requests screen wake lock when the browser supports it |
 | `#token=<ma-access-token>` | unset | URL fragment carrying the MA access token for controls and queue access |
 | `device_id` | stored browser identity | Explicit identity for this browser player |
-| `ma_url` | stored value, if any | MA web interface address saved by the kiosk |
 | `sendspin_url` | same host, port `8927` | Override the Sendspin connection address |
 
 The Player ID in the idle main title is always shown, independently of
@@ -192,3 +191,5 @@ uv run ruff check provider/
 uv run mypy provider/
 pre-commit run --all-files
 ```
+
+Browsers with hardware-only volume do not advertise MA software volume control during HTML5 playback. Active Sendspin playback retains software volume control.

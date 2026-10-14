@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.15] - 2026-10-14
+
+### Removed
+
+- The unused Music Assistant web URL option from the kiosk URL builder; playback continues to use the same-origin MA proxy.
+
+### Fixed
+
+- WebSocket connections reject foreign Origin headers before player registration, including browsers without Fetch Metadata headers.
+- MA volume controls follow browser capabilities: hardware-only HTML5 volume is hidden and unsupported commands do not report an unapplied level; active Sendspin playback retains software volume control.
+
 ## [1.0.14] - 2026-10-14
 
 ### Removed
