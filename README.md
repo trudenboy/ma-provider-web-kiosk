@@ -111,7 +111,6 @@ not grant the player page access to playback controls: supply its token separate
 | Key | Default | Description |
 |-----|---------|-------------|
 | `http_port` | `8098` | Port for the embedded kiosk HTTP server |
-| `player_idle_timeout` | `30` | Unregister disconnected idle players after this many minutes |
 | `show_stop_notification` | `false` | Show an informational notice after playback stops |
 | `enable_sendspin_bridge` | `true` | Enable experimental Sendspin integration |
 | `url_builder_require_auth` | `false` | Require MA sign-in for the builder and player list |
