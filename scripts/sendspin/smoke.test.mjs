@@ -6,11 +6,12 @@ import { createContext, runInContext } from 'node:vm';
 
 const source = await readFile(new URL('../../provider/static/web/sendspin-js/index.js', import.meta.url), 'utf8');
 
-async function loadBundle(storage) {
+async function loadBundle(storage, options = {}) {
     const context = createContext({
         crypto: webcrypto, localStorage: storage, console, atob, btoa,
         TextEncoder, TextDecoder, setTimeout, clearTimeout, setInterval, clearInterval,
     });
+    if (options.noGlobalThis) { context.globalThis = undefined; context.window = context; }
     runInContext(source, context);
     return context.WebKioskSendspin;
 }
@@ -59,6 +60,11 @@ test('bundle generates and persists a new identity', async () => {
     assert.ok(storage.getItem('sendspin-identity-sk'));
     assert.ok(storage.getItem('sendspin-pairing-psk'));
     assert.equal((await loadBundle(storage)).loadSendspinClientIdentity().clientId, identity.clientId);
+});
+
+test('classic SDK creates an identity without native globalThis', async () => {
+    const sdk = await loadBundle(memoryStorage(), { noGlobalThis:true });
+    assert.match(sdk.loadSendspinClientIdentity().clientId, /^[A-Za-z0-9_-]{43}$/);
 });
 
 test('bundled decoder handles PCM and preserves the callbacks used by Kiosk', async () => {

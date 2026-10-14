@@ -15,6 +15,9 @@
     if (SENDSPIN) document.documentElement.classList.add('sendspin');
     var FLAG = function (name) { return params.get(name) === '1'; };
     var REMOTE = FLAG('remote');
+    var LITE = FLAG('lite');
+    var KEEP_AWAKE = FLAG('wake_lock');
+    document.documentElement.classList.toggle('lite', LITE);
     var SHOW = { controls: FLAG('controls'), party: FLAG('party'), viz: FLAG('viz'), lyrics: FLAG('lyrics'), queue: FLAG('queue'), playerId: FLAG('show_player_id') };
     document.documentElement.classList.toggle('controls', SHOW.controls);
     document.documentElement.classList.toggle('no-grid', !window.CSS || !CSS.supports || !CSS.supports('display', 'grid'));
@@ -46,6 +49,7 @@
     }
     var sendspinClientId = '';
     var sendspinModule = null;
+    var sendspinConnecting = false;
     // True only while the Sendspin server is actually streaming audio here.
     var sendspinStreaming = false;
     var sendspinAudioAt = 0;
@@ -68,6 +72,11 @@
     var hasTrack = false;
     var partyExpanded = false;
     var ws = null;
+    var reconnectTimer = null;
+    var bootReady = false;
+    var wakeLock = null;
+    var wakePending = false;
+    var wakeGeneration = 0;
     var msgSeq = 0;
     var playing = false;
     var current = { title: '—', artist: '—', image: '', duration: 0, start: 0 };
@@ -130,6 +139,10 @@
         while (el.firstChild) el.removeChild(el.firstChild);
         if (child) el.appendChild(child);
     }
+    function setIconHref(el, href) {
+        el.setAttribute('href', href);
+        el.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', href);
+    }
     function fmt(sec) {
         sec = Math.max(0, Math.floor(sec || 0));
         var m = Math.floor(sec / 60), s = sec % 60;
@@ -183,13 +196,86 @@
     }
 
     function connectWS() {
+        if (navigator.onLine === false || (ws && ws.readyState <= WebSocket.OPEN)) return;
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
         var proto = location.protocol === 'https:' ? 'wss' : 'ws';
         var qs = 'device_id=' + encodeURIComponent(deviceId);
         if (sendspinClientId) qs += '&sendspin_client_id=' + encodeURIComponent(sendspinClientId);
-        ws = new WebSocket(proto + '://' + location.host + '/ws?' + qs);
-        ws.onmessage = function (ev) { handleWS(JSON.parse(ev.data)); };
-        ws.onclose = function () { ws = null; setTimeout(connectWS, 2000); };
-        ws.onerror = function () { try { ws.close(); } catch (e) { /* noop */ } };
+        var socket = new WebSocket(proto + '://' + location.host + '/ws?' + qs);
+        ws = socket;
+        socket.onmessage = function (ev) { if (ws === socket) handleWS(JSON.parse(ev.data)); };
+        socket.onclose = function () {
+            if (ws !== socket) return;
+            ws = null;
+            clearTimeout(reconnectTimer);
+            reconnectTimer = setTimeout(connectWS, 2000);
+        };
+        socket.onerror = function () { try { socket.close(); } catch (e) { /* noop */ } };
+    }
+    function recoverPage(forceReconnect) {
+        if (!bootReady || document.hidden || navigator.onLine === false) return;
+        if (forceReconnect && ws) {
+            var previous = ws;
+            ws = null;
+            previous.close();
+        }
+        connectWS();
+        if (playing && !sendspinStreaming && audio.paused && !isPrimeSource()) startPlayback();
+        var player = window.__sendspinPlayer;
+        if (SENDSPIN && player) {
+            if (!sendspinReceivedAudio) sendspinAudioAt = performance.now();
+            if (sendspinStreaming && playing) player.unlock().catch(function () {
+                sendspinUnlocked = false;
+                armAudioUnlock();
+                showAudioPrompt();
+            });
+            if (!player.isConnected && !sendspinConnecting) {
+                sendspinConnecting = true;
+                Promise.resolve().then(function () { return player.connect(); }).then(function () {
+                    sendspinConnecting = false;
+                }, function () {
+                    sendspinConnecting = false;
+                    if (window.__sendspinPlayer === player) useHtml5();
+                });
+            }
+        }
+        paintClock();
+        paintLyrics(true);
+        syncViz();
+        refreshWakeLock();
+        if (SHOW.party) fetchParty();
+        if (SHOW.queue && TOKEN) fetchQueue();
+    }
+    window.addEventListener('online', function () { recoverPage(true); });
+    window.addEventListener('pageshow', function (event) { recoverPage(!!event.persisted); });
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden && vizFrame) { cancelAnimationFrame(vizFrame); vizFrame = 0; }
+        refreshWakeLock();
+        recoverPage(false);
+    });
+    function refreshWakeLock() {
+        if (!KEEP_AWAKE || !navigator.wakeLock || !navigator.wakeLock.request) return;
+        if (document.hidden) {
+            wakeGeneration++;
+            var previous = wakeLock;
+            wakeLock = null;
+            if (previous) Promise.resolve(previous.release()).catch(function () {});
+            return;
+        }
+        if (wakePending || (wakeLock && !wakeLock.released)) return;
+        var generation = wakeGeneration;
+        wakePending = true;
+        Promise.resolve().then(function () { return navigator.wakeLock.request('screen'); }).then(function (lock) {
+            wakePending = false;
+            if (document.hidden || generation !== wakeGeneration) {
+                Promise.resolve(lock.release()).catch(function () {});
+                if (!document.hidden) refreshWakeLock();
+                return;
+            }
+            wakeLock = lock;
+            lock.addEventListener('release', function () { if (wakeLock === lock) wakeLock = null; });
+        }).catch(function () { wakePending = false; });
     }
     function sendWS(obj) { if (ws && ws.readyState === WebSocket.OPEN) { try { ws.send(JSON.stringify(obj)); } catch (e) { /* noop */ } } }
     function reportTrackEnded() {
@@ -286,7 +372,7 @@
                 break;
             case 'volume':
                 audio.volume = (msg.level || 0) / 100;
-                if (sendspinStreaming && window.__sendspinPlayer) window.__sendspinPlayer.setVolume(msg.level || 0);
+                if (sendspinStreaming && window.__sendspinPlayer && window.__sendspinPlayer.volume !== (msg.level || 0)) window.__sendspinPlayer.setVolume(msg.level || 0);
                 syncVolume(msg.level || 0);
                 break;
             case 'wave':
@@ -374,6 +460,7 @@
         audioArmed = false;
     }
     function onAudioGesture(ev) {
+        refreshWakeLock();
         if (ev.type === 'keydown' && ev.repeat) return;
         var needHtml = !htmlUnlocked;
         var needSendspin = SENDSPIN && !sendspinUnlocked;
@@ -534,7 +621,7 @@
     }
     function sync() {
         var playBtn = document.getElementById('k-play');
-        document.getElementById('k-play-icon').setAttribute('href', playing ? '#k-icon-pause' : '#k-icon-play');
+        setIconHref(document.getElementById('k-play-icon'), playing ? '#k-icon-pause' : '#k-icon-play');
         playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
         playBtn.title = playing ? 'Pause' : 'Play';
         ['k-play', 'k-prev', 'k-next', 'k-volume-button', 'kiosk-volume'].forEach(function (id) {
@@ -563,6 +650,8 @@
     var waveAnchorAt = 0;
     var vizSeekUntil = 0;
     var vizFrame = 0;
+    var lastVizPaint = 0;
+    var lastLyricsPaint = 0;
     var vizWasPlaying = false;
     var waveGen = 0;
     var pendingWave = null;
@@ -726,11 +815,12 @@
     }
     function vizLoop() {
         vizFrame = requestAnimationFrame(vizLoop);
-        if (SHOW.viz) paintViz();
-        paintLyrics();
+        var now = performance.now();
+        if (SHOW.viz && now - lastVizPaint >= (LITE ? 1000 / 15 : 1000 / 30)) { lastVizPaint = now; paintViz(); }
+        if (now - lastLyricsPaint >= 100) { lastLyricsPaint = now; paintLyrics(); }
     }
     function syncViz() {
-        var follow = playing && (SHOW.viz || (SHOW.lyrics && lyricsLines.length));
+        var follow = !document.hidden && playing && (SHOW.viz || (SHOW.lyrics && lyricsLines.length));
         if (!follow) {
             if (vizFrame) { cancelAnimationFrame(vizFrame); vizFrame = 0; }
             if (SHOW.viz) paintViz();
@@ -774,7 +864,7 @@
         }
         document.documentElement.classList.add('lyrics-visible');
         el.classList.remove('hidden');
-        var wide = window.innerWidth > 768;
+        var wide = window.innerWidth > 768 && !document.documentElement.classList.contains('no-grid');
         var layout = wide ? 'wide' : 'compact';
         var idx = lyricIndex(vizTime(), vizDuration());
         var changed = renderedLyrics !== lyricsLines || el.dataset.layout !== layout;
@@ -946,7 +1036,7 @@
         if (!sendspinStreaming && !mediaVolumeWritable) { setStatus('Use the device volume buttons'); return; }
         level = Math.max(0, Math.min(100, Math.round(level)));
         audio.volume = level / 100;
-        if (sendspinStreaming && window.__sendspinPlayer) window.__sendspinPlayer.setVolume(level);
+        if (sendspinStreaming && window.__sendspinPlayer && window.__sendspinPlayer.volume !== level) window.__sendspinPlayer.setVolume(level);
         syncVolume(level);
         clearTimeout(volumeTimer);
         var send = function () {
@@ -974,7 +1064,7 @@
         document.getElementById('k-volume-button').setAttribute('aria-label', 'Volume: ' + level + '%');
         var icon = level === 0 ? 'volume-x' : level <= 50 ? 'volume-1' : 'volume-2';
         ['k-volume-icon', 'k-volume-slider-icon'].forEach(function (id) {
-            document.getElementById(id).setAttribute('href', '#k-icon-' + icon);
+            setIconHref(document.getElementById(id), '#k-icon-' + icon);
         });
     }
 
@@ -1051,11 +1141,13 @@
         var key = normalizedKey(e);
         showKioskControls();
         if (key === 'Escape' && partyExpanded) {
+            if (e.preventDefault) e.preventDefault();
             setPartyExpanded(false);
             document.getElementById('kiosk-party').focus();
             return;
         }
         if (key === 'Escape' && volumePanelOpen) {
+            if (e.preventDefault) e.preventDefault();
             setVolumePanel(false);
             document.getElementById('k-volume-button').focus();
             return;
@@ -1078,10 +1170,15 @@
         return { 13:'Enter', 27:'Escape', 32:' ', 37:'ArrowLeft', 38:'ArrowUp', 39:'ArrowRight', 40:'ArrowDown', 10009:'Escape', 461:'Escape' }[e.keyCode] || '';
     }
     function remoteKey(e, key) {
-        if (key === 'Enter' && e.target && typeof e.target.click === 'function') {
-            e.preventDefault();
-            e.target.click();
-            return true;
+        if (key === 'Enter') {
+            if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return false;
+            var button = e.target && e.target.tagName === 'BUTTON' ? e.target : document.getElementById(SHOW.controls ? 'k-play' : 'kiosk-party');
+            if (button && !button.disabled && !button.classList.contains('hidden') && button.getClientRects().length) {
+                e.preventDefault();
+                button.focus();
+                button.click();
+                return true;
+            }
         }
         if (!/^Arrow/.test(key)) return false;
         if (e.target && e.target.tagName === 'INPUT' && (key === 'ArrowLeft' || key === 'ArrowRight')) return false;
@@ -1208,6 +1305,7 @@
     }
     function initSendspin() {
         if (!SENDSPIN || window.__sendspinPlayer) return;
+        sendspinConnecting = true;
         setStatus('Connecting Sendspin…');
         return loadSendspinModule().then(function (module) {
             return verifiedCodecs().then(function (codecs) { return { module:module, codecs:codecs }; });
@@ -1239,9 +1337,12 @@
             }
             return player.connect();
         }).then(function () {
+            sendspinConnecting = false;
+            if (!SENDSPIN) return;
             setSync('synced');
             setStatus('');
         }).catch(function (e) {
+            sendspinConnecting = false;
             useHtml5();
             document.getElementById('kiosk-sync').title = e.message || 'Sendspin unavailable';
         });
@@ -1294,7 +1395,9 @@
         prepareAudioUnlock();
         var ready = SENDSPIN ? prepareSendspinIdentity() : Promise.resolve();
         ready.then(function () {
+        bootReady = true;
         connectWS();
+        refreshWakeLock();
         setInterval(function () { if (sendspinStreaming) paintClock(); }, 500);
         if (SENDSPIN) setInterval(function () {
             if (sendspinStreaming && !sendspinReceivedAudio && sendspinUnlocked && playing && performance.now() - sendspinAudioAt > 10000) useHtml5();

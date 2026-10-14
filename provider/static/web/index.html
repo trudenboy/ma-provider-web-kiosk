@@ -136,7 +136,7 @@ SOFTWARE.</desc>
     <div id="kiosk-bar-track">
       <div id="kiosk-bar-artbox">
         <img id="kiosk-bar-art" alt="" class="hidden">
-        <svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#k-icon-music"></use></svg>
+        <svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#k-icon-music" xlink:href="#k-icon-music"></use></svg>
         <button type="button" id="kiosk-party" class="hidden" aria-label="Enlarge Party QR" aria-expanded="false" aria-controls="kiosk-party-expanded">
           <img id="kiosk-party-thumbnail" alt="Join Party">
         </button>
@@ -148,9 +148,9 @@ SOFTWARE.</desc>
     </div>
     <div id="kiosk-player-center">
       <div id="kiosk-transport">
-        <button type="button" id="k-prev" class="kiosk-control" aria-label="Previous" title="Previous"><svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#k-icon-skip-back"></use></svg></button>
-        <button type="button" id="k-play" class="kiosk-control" aria-label="Play" title="Play"><svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use id="k-play-icon" href="#k-icon-play"></use></svg></button>
-        <button type="button" id="k-next" class="kiosk-control" aria-label="Next" title="Next"><svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#k-icon-skip-forward"></use></svg></button>
+        <button type="button" id="k-prev" class="kiosk-control" aria-label="Previous" title="Previous"><svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#k-icon-skip-back" xlink:href="#k-icon-skip-back"></use></svg></button>
+        <button type="button" id="k-play" class="kiosk-control" aria-label="Play" title="Play"><svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use id="k-play-icon" href="#k-icon-play" xlink:href="#k-icon-play"></use></svg></button>
+        <button type="button" id="k-next" class="kiosk-control" aria-label="Next" title="Next"><svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#k-icon-skip-forward" xlink:href="#k-icon-skip-forward"></use></svg></button>
       </div>
       <div id="kiosk-progress">
         <input type="range" id="kiosk-seek" class="kiosk-slider" min="0" max="1000" value="0" aria-label="Position">
@@ -160,16 +160,16 @@ SOFTWARE.</desc>
     <div id="kiosk-bar-actions">
       <div id="kiosk-volume-control">
         <button type="button" id="k-volume-button" class="kiosk-control" aria-label="Volume: 100%" aria-controls="kiosk-volume-panel" aria-expanded="false" title="Volume">
-          <svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use id="k-volume-icon" href="#k-icon-volume-2"></use></svg>
+          <svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use id="k-volume-icon" href="#k-icon-volume-2" xlink:href="#k-icon-volume-2"></use></svg>
           <span id="k-volume-level">100%</span>
         </button>
         <div id="kiosk-volume-panel" role="group" aria-label="Volume">
           <div class="volume-panel-heading">
             <span>Volume</span>
-            <button type="button" id="k-volume-close" class="kiosk-control" aria-label="Close volume" title="Close"><svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#k-icon-x"></use></svg></button>
+            <button type="button" id="k-volume-close" class="kiosk-control" aria-label="Close volume" title="Close"><svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#k-icon-x" xlink:href="#k-icon-x"></use></svg></button>
           </div>
           <div class="volume-range-row">
-            <svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use id="k-volume-slider-icon" href="#k-icon-volume-2"></use></svg>
+            <svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use id="k-volume-slider-icon" href="#k-icon-volume-2" xlink:href="#k-icon-volume-2"></use></svg>
             <input type="range" id="kiosk-volume" class="kiosk-slider" min="0" max="100" value="100" aria-label="Volume">
             <span id="k-volume-panel-level">100%</span>
           </div>

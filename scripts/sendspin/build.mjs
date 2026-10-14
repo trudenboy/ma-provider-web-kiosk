@@ -31,7 +31,7 @@ const result = await build({
     target: ['chrome67', 'safari15', 'firefox68'],
     minify: true,
     legalComments: 'none',
-    banner: { js: `/*!\nGenerated Sendspin SDK: bundled and minified for Web Kiosk; software Opus omitted.\n\n${licenses.join('\n\n')}\n*/` },
+    banner: { js: `/*!\nGenerated Sendspin SDK: bundled and minified for Web Kiosk; software Opus omitted.\n\n${licenses.join('\n\n')}\n*/\nif(typeof globalThis==='undefined'&&typeof window!=='undefined')window.globalThis=window;` },
     write: false,
     metafile: true,
     plugins: [{
@@ -57,6 +57,8 @@ files.set('VERSION.txt', `@sendspin/sendspin-js@${versions['@sendspin/sendspin-j
 files.set('BUILD.json', JSON.stringify({
     packages: versions,
     esbuild: esbuild.version,
+    format: 'iife',
+    target: ['chrome67', 'safari15', 'firefox68'],
     sha256: createHash('sha256').update(files.get('index.js')).digest('hex'),
     opusFallback: false,
     licensePlacement: 'bundle-header',

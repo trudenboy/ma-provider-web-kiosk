@@ -12,3 +12,18 @@ for (const file of ['web.js', 'url-builder.js', 'index.html', 'builder-login.htm
         for (const script of scripts) assert.doesNotThrow(() => parse(script, { ecmaVersion: 2015, sourceType: 'script' }));
     });
 }
+
+test('Sendspin is an isolated classic bundle without optional chaining or nullish syntax', async () => {
+    const source = await readFile(new URL('../../provider/static/web/sendspin-js/index.js', import.meta.url), 'utf8');
+    const tree = parse(source, { ecmaVersion:2020, sourceType:'script' });
+    function visit(node) {
+        if (!node || typeof node !== 'object') return;
+        assert.notEqual(node.type, 'ChainExpression');
+        if (node.type === 'LogicalExpression') assert.notEqual(node.operator, '??');
+        for (const value of Object.values(node)) {
+            if (Array.isArray(value)) value.forEach(visit);
+            else if (value && typeof value === 'object') visit(value);
+        }
+    }
+    visit(tree);
+});

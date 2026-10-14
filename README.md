@@ -69,6 +69,9 @@ read-only **Kiosk URL** setting also contains the base player URL.
 | `lyrics` | off | `lyrics=1` enables lyric lines when available |
 | `queue` | off | `queue=1` enables the queue display; requires a token |
 | `show_player_id` | off | `show_player_id=1` adds a selectable ID badge |
+| `remote` | off | `remote=1` enables arrow/Enter/Back navigation for TV remotes |
+| `lite` | off | `lite=1` reduces decorative effects and visualizer redraw frequency |
+| `wake_lock` | off | `wake_lock=1` requests screen wake lock when the browser supports it |
 | `#token=<ma-access-token>` | unset | URL fragment carrying the MA access token for controls and queue access |
 | `device_id` | stored browser identity | Explicit identity for this browser player |
 | `ma_url` | stored value, if any | MA web interface address saved by the kiosk |
@@ -135,12 +138,44 @@ Choose another codec only if the browser supports it.
 - Sendspin integration is experimental. Complete any pairing prompt shown by
   the page. HTML5 fallback does not provide synchronised playback.
 - The bundled Sendspin client advertises **44.1/48 kHz, 16-bit stereo**. Codec
-  availability depends on the browser. Without WebCodecs `AudioDecoder`, it
-  uses FLAC/PCM; a separate software Opus decoder is not bundled.
+  availability is probed: Opus requires a supported WebCodecs configuration,
+  FLAC requires decoding a small sample, and PCM remains the baseline. A separate
+  software Opus decoder is not bundled.
 - HTML5 plays individual tracks with flow mode disabled; crossfade is not
   supported in that mode. MP3 is the compatibility default.
 - Lyrics and the visualizer depend on available lyrics and stored audio analysis.
   Party QR is shown only while a Party is active.
+
+## Browser compatibility
+
+HTML5 playback starts independently of Sendspin. Its required scripts are
+checked against classic ES2015 syntax, with Chromium 53 as the initial
+compatibility target; layout fallbacks cover missing Grid and newer CSS. This
+is a code target, not a certification of every TV browser. Legacy layouts keep
+compact lyrics, while modern wide screens show lyrics beside the artwork.
+
+Sendspin loads only when requested and the required Web Audio, crypto and
+64-bit JavaScript capabilities exist. The SDK bundle targets Chromium 67,
+Safari 15 and Firefox 68 capabilities. Unsupported browsers select HTML5.
+On LAN HTTP, WebCodecs is unavailable; verified FLAC or PCM can still be used.
+A HTTPS player page needs an explicit HTTPS/WSS `sendspin_url` served by a
+working secure proxy; otherwise it selects HTML5 rather than mixed content.
+
+Use `remote=1&controls=1` for a TV remote. Arrows move focus, Enter selects,
+and Back closes QR/volume panels when those events reach the web page. The
+browser or TV shell can intercept keys; privileged native TV application APIs
+are not used. Transport and volume commands still require a MA token.
+
+For slower panels, add `lite=1`. Optional `wake_lock=1` can keep the screen awake
+on supported secure origins; denial does not prevent playback. Configure the
+native kiosk application's screen/sleep settings when this API is unavailable.
+HTML5 on devices with hardware-only media volume shows **Device** instead of a
+software volume percentage. Connections and audio contexts are rechecked when
+the page/network returns; an additional tap may still be required by the browser.
+
+Actual TV codecs, remote events, screen sleep and long-running playback need
+device validation. See [the compatibility audit](BROWSER_COMPATIBILITY_AUDIT.md)
+for the original findings and implementation status.
 
 ## Development
 

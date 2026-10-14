@@ -53,6 +53,9 @@ real TV/tablet validation.
 
 Each stage is committed to PR #36 after its relevant checks pass.
 
+Implementation is complete for all four stages. The spec stays inprogress until
+PR #36 merges. Real-device validation remains a separate manual activity.
+
 ## Test Plan
 
 The user agreed to public seams: startup/WebSocket registration, DOM and user
