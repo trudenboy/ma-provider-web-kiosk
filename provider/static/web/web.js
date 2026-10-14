@@ -7,6 +7,7 @@
     var SENDSPIN = params.get('sendspin') !== '0';
     if (SENDSPIN) document.documentElement.classList.add('sendspin');
     var FLAG = function (name) { return params.get(name) === '1'; };
+    var REMOTE = FLAG('remote');
     var SHOW = { controls: FLAG('controls'), party: FLAG('party'), viz: FLAG('viz'), lyrics: FLAG('lyrics'), queue: FLAG('queue'), playerId: FLAG('show_player_id') };
     document.documentElement.classList.toggle('controls', SHOW.controls);
     document.documentElement.classList.toggle('no-grid', !window.CSS || !CSS.supports || !CSS.supports('display', 'grid'));
@@ -79,6 +80,7 @@
     var htmlUnlocked = false;
     var sendspinUnlocked = !SENDSPIN;
     var audioArmed = false;
+    var activationEvents = window.PointerEvent ? ['pointerdown', 'keydown'] : ['touchstart', 'touchend', 'mousedown', 'click', 'keydown'];
     var silentUrl = '';
 
     function rpc(command, args) {
@@ -282,7 +284,7 @@
             case 'sendspin':
                 if (msg.url) {
                     var target = new URL(msg.url, location.protocol + '//' + location.host);
-                    ['controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'ma_url', 'device_id', 'sendspin_url'].forEach(function (name) {
+                    ['controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'lite', 'wake_lock', 'ma_url', 'device_id', 'sendspin_url'].forEach(function (name) {
                         if (params.has(name) && !target.searchParams.has(name)) target.searchParams.set(name, params.get(name));
                     });
                     location.href = target.toString();
@@ -346,8 +348,7 @@
     }
     function maybeDisarmAudio() {
         if (!htmlUnlocked || !sendspinUnlocked) return;
-        document.removeEventListener('pointerdown', onAudioGesture, true);
-        document.removeEventListener('keydown', onAudioGesture, true);
+        activationEvents.forEach(function (name) { document.removeEventListener(name, onAudioGesture, true); });
         audioArmed = false;
     }
     function onAudioGesture(ev) {
@@ -387,8 +388,7 @@
     function armAudioUnlock() {
         if (audioArmed) return;
         audioArmed = true;
-        document.addEventListener('pointerdown', onAudioGesture, true);
-        document.addEventListener('keydown', onAudioGesture, true);
+        activationEvents.forEach(function (name) { document.addEventListener(name, onAudioGesture, true); });
     }
     function prepareAudioUnlock() {
         armAudioUnlock();
@@ -963,7 +963,7 @@
         };
         document.getElementById('k-volume-button').onclick = function () { setVolumePanel(!volumePanelOpen); };
         document.getElementById('k-volume-close').onclick = function () { setVolumePanel(false); };
-        document.addEventListener('pointerdown', function (e) {
+        document.addEventListener(window.PointerEvent ? 'pointerdown' : 'mousedown', function (e) {
             if (volumePanelOpen && !document.getElementById('kiosk-volume-control').contains(e.target)) setVolumePanel(false);
         });
         document.getElementById('k-play').onclick = function () {
@@ -978,6 +978,10 @@
         kseek.addEventListener('pointerdown', function () { seekPointer = true; });
         kseek.addEventListener('pointerup', function () { seekPointer = false; });
         kseek.addEventListener('pointercancel', function () { seekPointer = false; });
+        if (!window.PointerEvent) {
+            ['mousedown', 'touchstart'].forEach(function (name) { kseek.addEventListener(name, function () { seekPointer = true; }); });
+            ['mouseup', 'touchend', 'touchcancel'].forEach(function (name) { document.addEventListener(name, function () { seekPointer = false; }); });
+        }
         kseek.oninput = function (e) {
             var t = (Number(e.target.value) / 1000) * vizDuration();
             document.getElementById('kiosk-time').textContent = fmt(t);
@@ -1013,18 +1017,21 @@
     }
 
     document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape' && partyExpanded) {
+        var key = normalizedKey(e);
+        showKioskControls();
+        if (key === 'Escape' && partyExpanded) {
             setPartyExpanded(false);
             document.getElementById('kiosk-party').focus();
             return;
         }
-        if (e.key === 'Escape' && volumePanelOpen) {
+        if (key === 'Escape' && volumePanelOpen) {
             setVolumePanel(false);
             document.getElementById('k-volume-button').focus();
             return;
         }
+        if (REMOTE && remoteKey(e, key)) return;
         if (/^(INPUT|BUTTON|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
-        switch (e.key) {
+        switch (key) {
             case ' ': e.preventDefault(); cmd(playing ? 'players/cmd/pause' : 'players/cmd/play').catch(function () {}); break;
             case 'ArrowRight': seekToSong(songTime() + 10); break;
             case 'ArrowLeft': seekToSong(Math.max(0, songTime() - 10)); break;
@@ -1034,6 +1041,46 @@
             case 'p': case 'P': cmd('players/cmd/previous').catch(function () {}); break;
         }
     });
+
+    function normalizedKey(e) {
+        if (e.key && e.key !== 'Unidentified') return e.key;
+        return { 13:'Enter', 27:'Escape', 32:' ', 37:'ArrowLeft', 38:'ArrowUp', 39:'ArrowRight', 40:'ArrowDown', 10009:'Escape', 461:'Escape' }[e.keyCode] || '';
+    }
+    function remoteKey(e, key) {
+        if (key === 'Enter' && e.target && typeof e.target.click === 'function') {
+            e.preventDefault();
+            e.target.click();
+            return true;
+        }
+        if (!/^Arrow/.test(key)) return false;
+        if (e.target && e.target.tagName === 'INPUT' && (key === 'ArrowLeft' || key === 'ArrowRight')) return false;
+        var ids = ['kiosk-party', 'k-prev', 'k-play', 'k-next', 'k-volume-button', 'kiosk-seek', 'kiosk-volume', 'k-volume-close'];
+        var candidates = ids.map(function (id) { return document.getElementById(id); }).filter(function (el) {
+            return el && !el.disabled && !el.classList.contains('hidden') && el.getClientRects().length;
+        });
+        var currentFocus = document.activeElement;
+        var currentRect = currentFocus && currentFocus.getBoundingClientRect();
+        var selected = null;
+        var best = Infinity;
+        candidates.forEach(function (el) {
+            if (el === currentFocus) return;
+            if (!currentRect || candidates.indexOf(currentFocus) < 0) {
+                if (!selected || el.id === 'k-play') selected = el;
+                return;
+            }
+            var rect = el.getBoundingClientRect();
+            var dx = rect.left + rect.width / 2 - currentRect.left - currentRect.width / 2;
+            var dy = rect.top + rect.height / 2 - currentRect.top - currentRect.height / 2;
+            var horizontal = key === 'ArrowLeft' || key === 'ArrowRight';
+            var forward = horizontal ? dx : dy;
+            if (key === 'ArrowLeft' || key === 'ArrowUp') forward = -forward;
+            var score = forward + Math.abs(horizontal ? dy : dx) * 2;
+            if (forward > 2 && score < best) { best = score; selected = el; }
+        });
+        e.preventDefault();
+        if (selected) selected.focus();
+        return true;
+    }
 
     function getDefaultSendspinUrl() {
         return 'http://' + location.hostname + ':8927';

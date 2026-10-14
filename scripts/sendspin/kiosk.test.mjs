@@ -22,6 +22,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
     const fetchCalls = [];
     const audioInstances = [];
     let sdkLoads = 0;
+    let activeElement = null;
     const node = () => {
         const classes = new Set();
         return {
@@ -44,7 +45,10 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
             get childElementCount() { return this.children.length; },
             set innerHTML(value) { this._markup = value; this.children = []; },
             get innerHTML() { return this._markup || this.textContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); },
-            addEventListener() {}, removeEventListener() {}, focus() {},
+            addEventListener() {}, removeEventListener() {}, focus() { activeElement = this; },
+            click() { if (this.onclick) this.onclick(); },
+            getClientRects() { return this.classList.contains('hidden') ? [] : [this.getBoundingClientRect()]; },
+            getBoundingClientRect() { return this.rect || { left:0, top:0, width:40, height:40 }; },
             setAttribute(name, value) { this.attributes.set(name, String(value)); },
             removeAttribute(name) { this.attributes.delete(name); if (name === 'src') delete this.src; },
             getAttribute(name) { return this.attributes.get(name) ?? this[name] ?? null; },
@@ -65,6 +69,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
         },
         document: {
             documentElement: node(), body: node(),
+            get activeElement() { return activeElement; },
             head: { appendChild(script) {
                 sdkLoads++;
                 try { runInContext(options.fakeSdk ? fakeSdk : sdkSource, context); script.onload(); }
@@ -77,6 +82,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
                     const tag = html.match(new RegExp(`<[^>]*\\bid="${id}"[^>]*>`))?.[0] || '';
                     const classes = tag.match(/\bclass="([^"]*)"/)?.[1] || '';
                     element.classList.add(...classes.split(/\s+/).filter(Boolean));
+                    element.tagName = tag.match(/^<(\w+)/)?.[1].toUpperCase() || 'DIV';
                     if (options.noReplaceChildren) element.replaceChildren = undefined;
                     elements.set(id, element);
                 }
@@ -94,7 +100,10 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
             constructor() { audioInstances.push(this); }
             paused = true;
             addEventListener() {}
-            play() { return Promise.reject(Object.assign(new Error('Gesture required'), { name: 'NotAllowedError' })); }
+            play() {
+                if (options.playAllowed?.()) { this.paused = false; return Promise.resolve(); }
+                return Promise.reject(Object.assign(new Error('Gesture required'), { name: 'NotAllowedError' }));
+            }
             pause() { this.paused = true; }
             removeAttribute(name) { delete this[name]; }
             getAttribute(name) { return this[name] ?? null; }
@@ -151,6 +160,46 @@ test('HTML5 registers without crypto or loading Sendspin', async () => {
     assert.equal(result.sockets.length, 1);
     assert.equal(result.sdkLoads, 0);
     assert.match(result.storage.get('wk_device_id'), /^wk-/);
+});
+
+for (const type of ['touchstart', 'mousedown']) {
+    test(`${type} activates HTML5 audio without Pointer Events`, async () => {
+        let allowed = false;
+        const result = await startKiosk('?sendspin=0', [], undefined, {}, { playAllowed: () => allowed });
+        allowed = true;
+        for (const callback of result.documentEvents.get(type) || []) callback({ type });
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(result.audioInstances[0].paused, false);
+        assert.equal(result.elements.get('kiosk-status').classList.contains('audio-prompt'), false);
+    });
+}
+
+test('remote arrows move focus, Enter clicks and legacy Back closes QR', async () => {
+    const result = await startKiosk('?sendspin=0&controls=1&remote=1&party=1&token=test', [], undefined,
+        { info: { active: true, version: 'one' } });
+    result.socketInstances[0].onmessage({ data: JSON.stringify({ type: 'welcome', player_id: 'wk-remote' }) });
+    const prev = result.elements.get('k-prev');
+    const play = result.elements.get('k-play');
+    const next = result.elements.get('k-next');
+    prev.disabled = play.disabled = next.disabled = false;
+    prev.rect = { left:0, top:100, width:40, height:40 };
+    play.rect = { left:100, top:100, width:40, height:40 };
+    next.rect = { left:200, top:100, width:40, height:40 };
+    play.focus();
+    const key = (key, keyCode) => {
+        const event = { key, keyCode, target: result.context.document.activeElement, preventDefault() {}, stopPropagation() {} };
+        for (const callback of result.documentEvents.get('keydown')) callback(event);
+    };
+    key('ArrowRight');
+    assert.equal(result.context.document.activeElement, next);
+    assert.equal(result.elements.get('kiosk-controls').classList.contains('visible'), true);
+    key('Enter');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(result.apiCalls.at(-1).command, 'players/cmd/next');
+    const party = result.elements.get('kiosk-party');
+    party.onclick();
+    key('Unidentified', 10009);
+    assert.equal(party.attributes.get('aria-expanded'), 'false');
 });
 
 for (const search of ['?kiosk=1', '?kiosk=1&sendspin=1']) {
@@ -354,7 +403,7 @@ test('idle project artwork supplies the same background image as the album artwo
 
 test('URL builder emits a clean kiosk URL and only selected additions', async () => {
     const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
-    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'ma_url', 'token', 'device_id'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
+    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'ma_url', 'token', 'device_id'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
     nodes.get('url').dataset.base = 'http://192.168.10.10:8098';
     let mode = 'sendspin';
     const events = new Map();
@@ -414,7 +463,7 @@ test('fragment token is stored and removed from the visible player URL', async (
 
 test('builder puts credentials in the fragment instead of the request query', async () => {
     const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
-    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'ma_url', 'token', 'device_id'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
+    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'ma_url', 'token', 'device_id'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
     nodes.get('url').dataset.base = 'http://192.0.2.10:8098';
     nodes.get('token').value = 'secret & token';
     runInContext(builder, createContext({
