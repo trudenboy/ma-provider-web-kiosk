@@ -120,6 +120,9 @@ Choose another codec only if the browser supports it.
 
 ## Browser requirements and troubleshooting
 
+Open Kiosk and the URL builder as standalone pages. Their security headers block
+iframe embedding, including embedding in Home Assistant dashboards.
+
 - Use a browser with JavaScript, WebSocket, local storage, and audio playback
   support. Compatibility varies across TV browsers. Keep the device awake and
   avoid background-tab suspension.

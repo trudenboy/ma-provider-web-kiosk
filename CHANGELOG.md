@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.17] - 2026-10-14
+
+### Fixed
+
+- Sendspin import failures are reported during provider setup instead of silently disabling the bridge.
+
+### Security
+
+- Kiosk and sign-in pages deny iframe embedding to prevent clickjacking of credentials and playback controls.
+- Browser position and seek reports reject booleans, non-finite or negative numbers, and integers too large to represent elapsed time.
+
 ## [1.0.16] - 2026-10-14
 
 ### Fixed
