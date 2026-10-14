@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.20] - 2026-10-14
+
+### Added
+
+- Optional current MA group-name badge, enabled with `show_group=1` or the URL builder, with live membership and name updates.
+
+### Fixed
+
+- Sendspin playback receives lyrics and waveform data from its active MA queue, including track changes and reconnects without an API token.
+- HTML5 reconnects rebuild queued streams at the current song position through MA's server-side seek, retaining pause and updating connected tabs.
+- Failed or cancelled provider startup releases HTTP and Sendspin bridge resources.
+
+### Security
+
+- Removed wildcard CORS so unrelated websites cannot read the kiosk dashboard, Party QR or other same-origin responses.
+
 ## [1.0.19] - 2026-10-14
 
 ### Added
