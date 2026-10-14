@@ -2,7 +2,7 @@
 id: "0003"
 title: "Browser compatibility for TV, tablets and kiosk panels"
 size: L
-status: inprogress
+status: done
 priority: P0
 effort_minutes: 90
 ---
