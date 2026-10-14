@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.14] - 2026-10-14
+
+### Removed
+
+- The ineffective player idle timeout setting; normal browser disconnection retains the five-second grace period.
+
 ## [1.0.13] - 2026-10-14
 
 ### Added
@@ -17,10 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The bottom-left mini-player artwork shows Party QR, or the Sendspin/HTML5 emblem when Party is disabled, unavailable, or its QR cannot load.
 - HTML5 starts independently of the optional Sendspin SDK; legacy browser scripts and layout have compatibility fallbacks.
 - Sendspin advertises verified Opus/FLAC capabilities with PCM as the baseline and shared identity storage when persistent storage is denied.
-
-### Removed
-
-- The ineffective player idle timeout setting; normal browser disconnection retains the five-second grace period.
 
 ### Fixed
 
