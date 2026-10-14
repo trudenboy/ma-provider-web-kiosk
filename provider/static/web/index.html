@@ -115,14 +115,16 @@ SOFTWARE.</desc>
   <canvas id="kiosk-viz"></canvas>
   <div id="kiosk-bg"><img id="kiosk-bg-img" alt=""></div>
   <div id="kiosk-center">
-    <div id="kiosk-artbox">
-      <img id="kiosk-art" alt="HTML5" src="/web/html5.svg">
-      <button type="button" id="kiosk-party-expanded" class="hidden" aria-label="Close Party QR" title="Close Party QR">
-        <img id="kiosk-party-art" alt="Join Party">
-      </button>
+    <div id="kiosk-media-details">
+      <div id="kiosk-artbox">
+        <img id="kiosk-art" alt="HTML5" src="/web/html5.svg">
+        <button type="button" id="kiosk-party-expanded" class="hidden" aria-label="Close Party QR" title="Close Party QR">
+          <img id="kiosk-party-art" alt="Join Party">
+        </button>
+      </div>
+      <div id="kiosk-title">—</div>
+      <div id="kiosk-artist">—</div>
     </div>
-    <div id="kiosk-title">—</div>
-    <div id="kiosk-artist">—</div>
     <div id="kiosk-lyrics" class="hidden" aria-live="polite"></div>
   </div>
   <div id="kiosk-sync"></div>
@@ -135,6 +137,9 @@ SOFTWARE.</desc>
       <div id="kiosk-bar-artbox">
         <img id="kiosk-bar-art" alt="" class="hidden">
         <svg class="kiosk-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#k-icon-music"></use></svg>
+        <button type="button" id="kiosk-party" class="hidden" aria-label="Enlarge Party QR" aria-expanded="false" aria-controls="kiosk-party-expanded">
+          <img id="kiosk-party-thumbnail" alt="Join Party">
+        </button>
       </div>
       <div id="kiosk-bar-meta">
         <div id="kiosk-bar-title">Nothing playing</div>
@@ -170,7 +175,6 @@ SOFTWARE.</desc>
           </div>
         </div>
       </div>
-      <button type="button" id="kiosk-party" class="hidden" aria-label="Enlarge Party QR" aria-expanded="false" aria-controls="kiosk-party-expanded"></button>
     </div>
   </div>
 </div>

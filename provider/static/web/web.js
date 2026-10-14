@@ -63,6 +63,7 @@
     var queueIndex = -1;
     var lyricsLines = [];
     var lyricsIdx = -1;
+    var renderedLyrics = null;
     var endReported = false;
     var playbackGeneration = '';
 
@@ -454,8 +455,9 @@
         var barBox = document.getElementById('kiosk-bar-artbox');
         barArt.onload = function () { barBox.classList.add('has-art'); barArt.classList.remove('hidden'); };
         barArt.onerror = function () { barBox.classList.remove('has-art'); barArt.classList.add('hidden'); };
-        barBox.classList.toggle('project-art', !src);
-        barArt.src = src || logo;
+        barBox.classList.add('project-art');
+        barArt.src = logo;
+        barArt.alt = SENDSPIN ? 'Sendspin' : 'HTML5';
         if (!src) {
             showEmblem();
             paintClock();
@@ -729,18 +731,56 @@
         }
         return idx;
     }
-    function paintLyrics() {
+    function paintLyrics(resized) {
         var el = document.getElementById('kiosk-lyrics');
         if (!el) return;
         if (!SHOW.lyrics || !lyricsLines.length) {
+            document.documentElement.classList.remove('lyrics-visible');
             if (!el.classList.contains('hidden')) el.classList.add('hidden');
             if (el.childElementCount) el.textContent = '';
             lyricsIdx = -1;
+            renderedLyrics = null;
             return;
         }
+        document.documentElement.classList.add('lyrics-visible');
+        el.classList.remove('hidden');
+        var wide = window.innerWidth > 768;
+        var layout = wide ? 'wide' : 'compact';
         var idx = lyricIndex(vizTime(), vizDuration());
-        if (idx === lyricsIdx && el.childElementCount === 3) return;
+        var changed = renderedLyrics !== lyricsLines || el.dataset.layout !== layout;
+        if (wide) {
+            var content;
+            if (changed) {
+                content = document.createElement('div');
+                content.classList.add('lyrics-content');
+                lyricsLines.forEach(function (line) {
+                    var row = document.createElement('div');
+                    row.classList.add('l');
+                    row.textContent = line.text;
+                    content.appendChild(row);
+                });
+                el.replaceChildren(content);
+            }
+            content = el.children[0];
+            if (changed || idx !== lyricsIdx) {
+                Array.from(content.children).forEach(function (row, i) {
+                    row.classList.toggle('current', i === idx);
+                    row.classList.toggle('far', Math.abs(i - idx) > 1);
+                });
+            }
+            if (changed || idx !== lyricsIdx || resized) {
+                var active = content.children[Math.max(0, idx)];
+                content.style.transform = 'translateY(' + (el.clientHeight / 2 - active.offsetTop - active.offsetHeight / 2) + 'px)';
+            }
+            lyricsIdx = idx;
+            renderedLyrics = lyricsLines;
+            el.dataset.layout = layout;
+            return;
+        }
+        if (!changed && idx === lyricsIdx) return;
         lyricsIdx = idx;
+        renderedLyrics = lyricsLines;
+        el.dataset.layout = layout;
         var prev = idx > 0 ? lyricsLines[idx - 1].text : '';
         var cur = idx >= 0 ? lyricsLines[idx].text : '';
         var next = idx >= 0 && idx + 1 < lyricsLines.length ? lyricsLines[idx + 1].text : (idx < 0 && lyricsLines.length ? lyricsLines[0].text : '');
@@ -749,7 +789,10 @@
             '<div class="l current">' + esc(cur) + '</div>' +
             '<div class="l">' + esc(next) + '</div>';
     }
-    window.addEventListener('resize', function () { if (!vizFrame) paintViz(); });
+    window.addEventListener('resize', function () {
+        paintLyrics(true);
+        if (!vizFrame) paintViz();
+    });
 
     function setPartyExpanded(open) {
         var party = document.getElementById('kiosk-party');
@@ -785,9 +828,10 @@
             if (el.dataset.version === version && !el.classList.contains('hidden')) return;
             el.dataset.version = version;
             el.classList.remove('hidden');
-            el.innerHTML = '<img src="/api/party/qr.svg?v=' + encodeURIComponent(version) + '" alt="Join">' +
-                (info.name ? '<div class="name">' + esc(info.name) + '</div>' : '') +
-                (info.qr_text ? '<div class="qr">' + esc(info.qr_text) + '</div>' : '');
+            el.title = [info.name || 'Party', info.qr_text || 'Enlarge QR'].join(' — ');
+            var thumbnail = document.getElementById('kiosk-party-thumbnail');
+            thumbnail.onerror = hideParty;
+            thumbnail.src = '/api/party/qr.svg?v=' + encodeURIComponent(version);
             setPartyExpanded(partyExpanded);
         } catch (e) { hideParty(); }
     }

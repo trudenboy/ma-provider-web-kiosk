@@ -18,6 +18,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
     const apiCalls = [];
     const intervals = [];
     const documentEvents = new Map();
+    const windowEvents = new Map();
     const fetchCalls = [];
     const audioInstances = [];
     const node = () => {
@@ -34,7 +35,8 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
             },
             style: { setProperty(name, value) { this[name] = value; } },
             dataset: {}, attributes: new Map(), textContent: '', value: '', children: [],
-            appendChild(child) { this.children.push(child); return child; },
+            appendChild(child) { child.offsetTop = this.children.length * 80; child.offsetHeight = 64; this.children.push(child); return child; },
+            clientHeight: 400,
             replaceChildren(...children) { this.children = children; this._markup = ''; this.textContent = ''; },
             get childElementCount() { return this.children.length; },
             set innerHTML(value) { this._markup = value; this.children = []; },
@@ -50,6 +52,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
     const config = options;
     const context = createContext({
         URL, URLSearchParams, Blob, TextEncoder, TextDecoder, atob, btoa, console,
+        innerWidth: options.width || 390,
         location: { search, hash: options.hash || '', pathname: '/kiosk', protocol: 'http:', host: '192.0.2.10:8098' },
         history: { replaceState(_state, _title, url) { const target = new URL(url, 'http://192.0.2.10:8098'); context.location.search = target.search; context.location.hash = target.hash; } },
         crypto: { getRandomValues: webcrypto.getRandomValues.bind(webcrypto), randomUUID },
@@ -61,7 +64,13 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
             documentElement: node(), body: node(),
             getElementById(id) {
                 if (!elementIds.has(id)) return null;
-                if (!elements.has(id)) elements.set(id, node());
+                if (!elements.has(id)) {
+                    const element = node();
+                    const tag = html.match(new RegExp(`<[^>]*\\bid="${id}"[^>]*>`))?.[0] || '';
+                    const classes = tag.match(/\bclass="([^"]*)"/)?.[1] || '';
+                    element.classList.add(...classes.split(/\s+/).filter(Boolean));
+                    elements.set(id, element);
+                }
                 return elements.get(id);
             },
             createElement: node,
@@ -103,7 +112,10 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
         performance: { now: () => now },
     });
     context.window = context;
-    context.addEventListener = () => {};
+    context.addEventListener = (type, callback) => {
+        if (!windowEvents.has(type)) windowEvents.set(type, []);
+        windowEvents.get(type).push(callback);
+    };
     const fakeSdk = `
         export function loadSendspinClientIdentity() { return { clientId: 'a'.repeat(43) }; }
         export class SendspinPlayer {
@@ -125,7 +137,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
         startupError = error;
     }
     await new Promise(resolve => setImmediate(resolve));
-    return { sockets, socketInstances, storage, startupError, elements, apiCalls, intervals, documentEvents, fetchCalls, root: context.document.documentElement, location: context.location, context, frames, audioInstances, advance: ms => { now += ms; } };
+    return { sockets, socketInstances, storage, startupError, elements, apiCalls, intervals, documentEvents, fetchCalls, root: context.document.documentElement, location: context.location, context, frames, audioInstances, advance: ms => { now += ms; }, resize: width => { context.innerWidth = width; (windowEvents.get('resize') || []).forEach(callback => callback()); } };
 }
 
 for (const search of ['?kiosk=1', '?kiosk=1&sendspin=1']) {
@@ -224,6 +236,39 @@ for (const [search, type, logo] of [
         assert.equal(result.elements.get('kiosk-art').src, logo);
     });
 }
+
+for (const [search, logo] of [['?sendspin=0', '/web/html5.svg'], ['', '/web/sendspin.svg']]) {
+    test(`bottom-left artwork stays a project emblem without Party (${search})`, async () => {
+        const result = await startKiosk(search);
+        const message = data => result.socketInstances[0].onmessage({ data: JSON.stringify(data) });
+        message({ type: 'welcome', player_id: 'wk-logo' });
+        message({ type: 'play', path: '/track', title: 'Track', image_url: '/album.jpg', duration: 180 });
+        assert.equal(result.elements.get('kiosk-bar-art').src, logo);
+        assert.equal(result.elements.get('kiosk-party').classList.contains('hidden'), true);
+        assert.equal(result.elements.get('kiosk-art').src.includes('album.jpg'), true);
+    });
+}
+
+test('Party thumbnail falls back to the emblem on a failed QR and recovers on the next poll', async () => {
+    const state = { info: { active: true, version: 'one', name: 'Room' } };
+    const result = await startKiosk('?sendspin=0&party=1', [], undefined, state);
+    const thumbnail = result.elements.get('kiosk-party-thumbnail');
+    const party = result.elements.get('kiosk-party');
+    assert.equal(thumbnail.src, '/api/party/qr.svg?v=one');
+    assert.equal(party.classList.contains('hidden'), false);
+    assert.equal(result.elements.get('kiosk-bar-art').src, '/web/html5.svg');
+    party.onclick();
+    thumbnail.onerror();
+    assert.equal(party.classList.contains('hidden'), true);
+    assert.equal(party.attributes.get('aria-expanded'), 'false');
+    const poll = result.intervals.find(interval => interval.delay === 10000).callback;
+    await poll();
+    assert.equal(party.classList.contains('hidden'), false);
+    state.info = { active: false };
+    await poll();
+    assert.equal(party.classList.contains('hidden'), true);
+    assert.equal(result.elements.get('kiosk-bar-art').src, '/web/html5.svg');
+});
 
 test('Party QR toggles the large artwork without losing current track updates', async () => {
     const partyState = { info: { active: true, version: 'one', name: 'Party' } };
@@ -403,6 +448,36 @@ test('long queue keeps the current item visible beyond the first 200 entries', a
     assert.equal(active.children[0].children[0].textContent, 'Track 350');
 });
 
+
+test('wide lyrics show the full song and follow the active line across viewport changes', async () => {
+    const result = await startKiosk('?lyrics=1', [], undefined, {}, { fakeSdk: true, width: 1280 });
+    const message = data => result.socketInstances[0].onmessage({ data: JSON.stringify(data) });
+    message({ type: 'welcome', player_id: 'wk-lyrics' });
+    await new Promise(resolve => setImmediate(resolve));
+    message({ type: 'play', path: '/track', title: 'Track', duration: 180 });
+    const core = result.context.__sendspinPlayer.core;
+    core.onStreamStart();
+    core.trackProgress = { positionMs: 65000, durationMs: 180000, playbackSpeed: 1 };
+    message({ type: 'lyrics', lines: [{ t: 0, text: 'Opening' }, { t: 20, text: 'Verse' }, { t: 60, text: 'Middle' }, { t: 90, text: 'Ending' }, { t: 120, text: '<Outro>' }] });
+    const lyrics = result.elements.get('kiosk-lyrics');
+    assert.equal(lyrics.dataset.layout, 'wide');
+    assert.deepEqual(Array.from(lyrics.children[0].children, line => line.textContent), ['Opening', 'Verse', 'Middle', 'Ending', '<Outro>']);
+    assert.equal(lyrics.children[0].children[2].classList.contains('current'), true);
+    assert.equal(lyrics.children[0].style.transform, 'translateY(8px)');
+    core.trackProgress.positionMs = 95000;
+    result.frames.at(-1)();
+    assert.equal(lyrics.children[0].children[3].classList.contains('current'), true);
+    assert.equal(lyrics.children[0].style.transform, 'translateY(-72px)');
+    result.resize(768);
+    assert.equal(lyrics.dataset.layout, 'compact');
+    assert.match(lyrics.innerHTML, /^<div class="l">Middle<\/div><div class="l current">Ending<\/div><div class="l">&lt;Outro&gt;<\/div>$/);
+    result.resize(769);
+    assert.equal(lyrics.dataset.layout, 'wide');
+    assert.equal(lyrics.children[0].children[3].classList.contains('current'), true);
+    message({ type: 'lyrics', lines: [] });
+    assert.equal(lyrics.classList.contains('hidden'), true);
+    assert.equal(result.root.classList.contains('lyrics-visible'), false);
+});
 
 for (const search of ['?lyrics=1', '?lyrics=1&token=test']) {
     test(`Sendspin lyrics follow SDK progress without a visible queue (${search})`, async () => {

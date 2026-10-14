@@ -39,10 +39,14 @@ closing its last connection removes the player after a five-second grace period.
   and the Music Assistant server version underneath.
 - Optional playback controls styled after the MA mini-player, with a layout
   for narrow screens.
-- Optional visualizer from stored audio analysis, three lyric lines, Party QR,
+- Optional visualizer from stored audio analysis, lyrics, Party QR,
   queue display, and an extra selectable Player ID badge.
 - Click the Party QR to show it in place of the large artwork; click again or
   press Escape to restore the artwork.
+- On wide screens, lyrics appear to the right of the artwork and follow the
+  current line. Narrow screens keep three lyric lines below the artwork.
+- The bottom-left thumbnail shows the Party QR when available, otherwise the
+  Sendspin or HTML5 emblem.
 - Experimental Sendspin grouping, with HTML5 fallback when Sendspin cannot connect.
 - An interactive URL builder and a copyable base URL in provider settings.
 
