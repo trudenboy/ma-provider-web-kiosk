@@ -323,7 +323,7 @@ class WebKioskHTTPServer:
         prefix = self._get_prefix(request)
         players = (
             "".join(
-                f"<li>{html_escape(p.display_name)} — {html_escape(p.playback_state.value)}</li>"
+                f"<li>{html_escape(p.display_name)} — {html_escape(p.state.playback_state.value)}</li>"
                 for p in self.provider.players
             )
             or "<li>No players registered</li>"
