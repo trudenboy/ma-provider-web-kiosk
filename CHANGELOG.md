@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTML5 starts independently of the optional Sendspin SDK; legacy browser scripts and layout have compatibility fallbacks.
 - Sendspin advertises verified Opus/FLAC capabilities with PCM as the baseline and shared identity storage when persistent storage is denied.
 
+### Removed
+
+- The ineffective player idle timeout setting; normal browser disconnection retains the five-second grace period.
+
 ### Fixed
 
 - A shared browser Sendspin identity has one kiosk owner; changing device IDs transfers ownership without letting the old kiosk delete the new bridge.
