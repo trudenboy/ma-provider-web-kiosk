@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Self
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from aiohttp import ClientError, WSServerHandshakeError
@@ -600,12 +600,12 @@ async def test_ws_volume_capability_tracks_sendspin_and_html5_playback(
     ws = await http_client.ws_connect("/ws?volume_control=0")
     await ws.receive_json()
     changed = asyncio.Event()
-    player.update_state = Mock(side_effect=changed.set)  # type: ignore[method-assign]
-    for supported in (True, False):
-        changed.clear()
-        await ws.send_json({"type": "capabilities", "volume_control": supported})
-        await asyncio.wait_for(changed.wait(), 1)
-        assert (PlayerFeature.VOLUME_SET in player.supported_features) is supported
+    with patch.object(player, "update_state", side_effect=changed.set):
+        for supported in (True, False):
+            changed.clear()
+            await ws.send_json({"type": "capabilities", "volume_control": supported})
+            await asyncio.wait_for(changed.wait(), 1)
+            assert (PlayerFeature.VOLUME_SET in player.supported_features) is supported
     await ws.close()
 
 

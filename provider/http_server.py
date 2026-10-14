@@ -669,8 +669,11 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         msg_type = msg.get("type")
         if msg_type == "capabilities":
             supported = msg.get("volume_control")
-            if ws in self._ws_clients.get(player_id, set()) and isinstance(supported, bool):
-                assert ws is not None
+            if (
+                ws is not None
+                and ws in self._ws_clients.get(player_id, set())
+                and isinstance(supported, bool)
+            ):
                 self._ws_volume_support[ws] = supported
                 self._update_volume_support(player_id)
         elif msg_type == "position":
