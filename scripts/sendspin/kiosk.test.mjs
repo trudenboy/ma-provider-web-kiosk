@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { createContext, runInContext, SourceTextModule } from 'node:vm';
+import { createContext, runInContext } from 'node:vm';
 
 const source = await readFile(new URL('../../provider/static/web/web.js', import.meta.url), 'utf8');
 const sdkSource = await readFile(new URL('../../provider/static/web/sendspin-js/index.js', import.meta.url), 'utf8');
@@ -21,6 +21,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
     const windowEvents = new Map();
     const fetchCalls = [];
     const audioInstances = [];
+    let sdkLoads = 0;
     const node = () => {
         const classes = new Set();
         return {
@@ -38,6 +39,8 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
             appendChild(child) { child.offsetTop = this.children.length * 80; child.offsetHeight = 64; this.children.push(child); return child; },
             clientHeight: 400,
             replaceChildren(...children) { this.children = children; this._markup = ''; this.textContent = ''; },
+            removeChild(child) { this.children.splice(this.children.indexOf(child), 1); },
+            get firstChild() { return this.children[0] || null; },
             get childElementCount() { return this.children.length; },
             set innerHTML(value) { this._markup = value; this.children = []; },
             get innerHTML() { return this._markup || this.textContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); },
@@ -55,13 +58,18 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
         innerWidth: options.width || 390,
         location: { search, hash: options.hash || '', pathname: '/kiosk', protocol: 'http:', host: '192.0.2.10:8098' },
         history: { replaceState(_state, _title, url) { const target = new URL(url, 'http://192.0.2.10:8098'); context.location.search = target.search; context.location.hash = target.hash; } },
-        crypto: { getRandomValues: webcrypto.getRandomValues.bind(webcrypto), randomUUID },
+        crypto: options.noCrypto ? undefined : { getRandomValues: webcrypto.getRandomValues.bind(webcrypto), randomUUID },
         localStorage: {
             getItem(key) { return storage.get(key) ?? null; },
             setItem(key, value) { storage.set(key, value); },
         },
         document: {
             documentElement: node(), body: node(),
+            head: { appendChild(script) {
+                sdkLoads++;
+                try { runInContext(options.fakeSdk ? fakeSdk : sdkSource, context); script.onload(); }
+                catch (error) { script.onerror(error); }
+            } },
             getElementById(id) {
                 if (!elementIds.has(id)) return null;
                 if (!elements.has(id)) {
@@ -69,6 +77,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
                     const tag = html.match(new RegExp(`<[^>]*\\bid="${id}"[^>]*>`))?.[0] || '';
                     const classes = tag.match(/\bclass="([^"]*)"/)?.[1] || '';
                     element.classList.add(...classes.split(/\s+/).filter(Boolean));
+                    if (options.noReplaceChildren) element.replaceChildren = undefined;
                     elements.set(id, element);
                 }
                 return elements.get(id);
@@ -117,28 +126,32 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
         windowEvents.get(type).push(callback);
     };
     const fakeSdk = `
-        export function loadSendspinClientIdentity() { return { clientId: 'a'.repeat(43) }; }
-        export class SendspinPlayer {
+        window.WebKioskSendspin = {
+        loadSendspinClientIdentity: function() { return { clientId: 'a'.repeat(43) }; },
+        SendspinPlayer: class {
             constructor(config) { this.config = config; this.core = {}; }
             get trackProgress() { return this.core.trackProgress; }
             unlock() { return Promise.resolve(); }
             connect() { return Promise.resolve(); }
-        }
+        }};
     `;
-    const sdk = new SourceTextModule(options.fakeSdk ? fakeSdk : sdkSource, { context });
-    await sdk.link(specifier => { throw new Error(`Unexpected SDK import: ${specifier}`); });
-    await sdk.evaluate();
     let startupError;
     try {
-        runInContext(source, context, {
-            importModuleDynamically: async () => sdk,
-        });
+        runInContext(source, context);
     } catch (error) {
         startupError = error;
     }
     await new Promise(resolve => setImmediate(resolve));
-    return { sockets, socketInstances, storage, startupError, elements, apiCalls, intervals, documentEvents, fetchCalls, root: context.document.documentElement, location: context.location, context, frames, audioInstances, advance: ms => { now += ms; }, resize: width => { context.innerWidth = width; (windowEvents.get('resize') || []).forEach(callback => callback()); } };
+    return { sockets, socketInstances, storage, startupError, elements, apiCalls, intervals, documentEvents, fetchCalls, sdkLoads, root: context.document.documentElement, location: context.location, context, frames, audioInstances, advance: ms => { now += ms; }, resize: width => { context.innerWidth = width; (windowEvents.get('resize') || []).forEach(callback => callback()); } };
 }
+
+test('HTML5 registers without crypto or loading Sendspin', async () => {
+    const result = await startKiosk('?sendspin=0', [], undefined, {}, { fakeSdk: true, noCrypto: true });
+    assert.equal(result.startupError, undefined);
+    assert.equal(result.sockets.length, 1);
+    assert.equal(result.sdkLoads, 0);
+    assert.match(result.storage.get('wk_device_id'), /^wk-/);
+});
 
 for (const search of ['?kiosk=1', '?kiosk=1&sendspin=1']) {
     test(`fresh kiosk registers over HTTP without crypto.randomUUID (${search})`, async () => {
@@ -449,8 +462,8 @@ test('long queue keeps the current item visible beyond the first 200 entries', a
 });
 
 
-test('wide lyrics show the full song and follow the active line across viewport changes', async () => {
-    const result = await startKiosk('?lyrics=1', [], undefined, {}, { fakeSdk: true, width: 1280 });
+test('wide lyrics show the full song without replaceChildren and follow viewport changes', async () => {
+    const result = await startKiosk('?lyrics=1', [], undefined, {}, { fakeSdk: true, width: 1280, noReplaceChildren: true });
     const message = data => result.socketInstances[0].onmessage({ data: JSON.stringify(data) });
     message({ type: 'welcome', player_id: 'wk-lyrics' });
     await new Promise(resolve => setImmediate(resolve));

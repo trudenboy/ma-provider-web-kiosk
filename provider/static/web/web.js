@@ -9,6 +9,7 @@
     var FLAG = function (name) { return params.get(name) === '1'; };
     var SHOW = { controls: FLAG('controls'), party: FLAG('party'), viz: FLAG('viz'), lyrics: FLAG('lyrics'), queue: FLAG('queue'), playerId: FLAG('show_player_id') };
     document.documentElement.classList.toggle('controls', SHOW.controls);
+    document.documentElement.classList.toggle('no-grid', !window.CSS || !CSS.supports || !CSS.supports('display', 'grid'));
 
     var LS = {
         get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
@@ -18,12 +19,14 @@
     if (!deviceId) { deviceId = createDeviceId(); LS.set('wk_device_id', deviceId); }
 
     function createDeviceId() {
-        if (typeof crypto.randomUUID === 'function') return 'wk-' + crypto.randomUUID();
+        if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return 'wk-' + crypto.randomUUID();
         // randomUUID requires a secure context; LAN kiosks also run over plain HTTP.
-        var bytes = crypto.getRandomValues(new Uint8Array(16));
+        var bytes = new Uint8Array(16);
+        if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') crypto.getRandomValues(bytes);
+        else for (var i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
         bytes[6] = (bytes[6] & 15) | 64;
         bytes[8] = (bytes[8] & 63) | 128;
-        var hex = Array.from(bytes, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+        var hex = Array.from(bytes, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
         return 'wk-' + hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16)
             + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
     }
@@ -78,17 +81,18 @@
     var audioArmed = false;
     var silentUrl = '';
 
-    async function rpc(command, args) {
+    function rpc(command, args) {
         // Same origin as this page. The kiosk server forwards the call to MA,
         // because the browser will not call MA's port from this one.
-        if (!TOKEN) throw new Error('Configure token');
-        var res = await fetch('/api', {
+        if (!TOKEN) return Promise.reject(new Error('Configure token'));
+        return fetch('/api', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
             body: JSON.stringify({ command: command, args: args || {}, message_id: String(++msgSeq) })
+        }).then(function (res) {
+            if (!res.ok) return res.text().then(function (text) { throw new Error(text); });
+            return res.json();
         });
-        if (!res.ok) throw new Error(await res.text());
-        return res.json();
     }
 
     function setStatus(t) {
@@ -99,6 +103,10 @@
         el.classList.toggle('audio-prompt', el.textContent === AUDIO_PROMPT);
     }
     function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+    function replaceContent(el, child) {
+        while (el.firstChild) el.removeChild(el.firstChild);
+        if (child) el.appendChild(child);
+    }
     function fmt(sec) {
         sec = Math.max(0, Math.floor(sec || 0));
         var m = Math.floor(sec / 60), s = sec % 60;
@@ -759,7 +767,7 @@
                     row.textContent = line.text;
                     content.appendChild(row);
                 });
-                el.replaceChildren(content);
+                replaceContent(el, content);
             }
             content = el.children[0];
             if (changed || idx !== lyricsIdx) {
@@ -810,16 +818,17 @@
         var party = document.getElementById('kiosk-party');
         party.classList.add('hidden');
         party.dataset.version = '';
+        document.documentElement.classList.remove('party-active');
         setPartyExpanded(false);
     }
 
-    async function fetchParty() {
+    function fetchParty() {
         var el = document.getElementById('kiosk-party');
         if (!SHOW.party) { hideParty(); return; }
-        try {
-            var res = await fetch('/api/party');
-            if (!res.ok) { hideParty(); return; }
-            var info = await res.json();
+        return fetch('/api/party').then(function (res) {
+            if (!res.ok) throw new Error('Party unavailable');
+            return res.json();
+        }).then(function (info) {
             if (!info || !info.active) {
                 hideParty();
                 return;
@@ -828,12 +837,13 @@
             if (el.dataset.version === version && !el.classList.contains('hidden')) return;
             el.dataset.version = version;
             el.classList.remove('hidden');
+            document.documentElement.classList.add('party-active');
             el.title = [info.name || 'Party', info.qr_text || 'Enlarge QR'].join(' — ');
             var thumbnail = document.getElementById('kiosk-party-thumbnail');
             thumbnail.onerror = hideParty;
             thumbnail.src = '/api/party/qr.svg?v=' + encodeURIComponent(version);
             setPartyExpanded(partyExpanded);
-        } catch (e) { hideParty(); }
+        }).catch(hideParty);
     }
 
     function fetchQueue() {
@@ -852,9 +862,10 @@
     }
     function renderQueue() {
         var el = document.getElementById('kiosk-queue');
+        document.documentElement.classList.toggle('queue-active', !!queue.length);
         if (!queue.length) { el.classList.add('hidden'); return; }
         el.classList.remove('hidden');
-        el.replaceChildren();
+        replaceContent(el);
         queue.forEach(function (qi, i) {
             var mi = qi.media_item || {};
             var row = document.createElement('div');
@@ -1034,24 +1045,35 @@
         el.classList.remove('hidden');
         el.textContent = 'Pairing code ' + pin;
     }
-    async function loadSendspinModule() {
-        if (!sendspinModule) sendspinModule = await import('./sendspin-js/index.js');
-        return sendspinModule;
+    var sendspinLoad = null;
+    function loadSendspinModule() {
+        if (sendspinModule) return Promise.resolve(sendspinModule);
+        if (sendspinLoad) return sendspinLoad;
+        sendspinLoad = new Promise(function (resolve, reject) {
+            var script = document.createElement('script');
+            script.src = '/web/sendspin-js/index.js';
+            script.onload = function () {
+                sendspinModule = window.WebKioskSendspin;
+                if (sendspinModule) resolve(sendspinModule);
+                else reject(new Error('Sendspin SDK unavailable'));
+            };
+            script.onerror = function () { sendspinLoad = null; reject(new Error('Sendspin SDK could not load')); };
+            document.head.appendChild(script);
+        });
+        return sendspinLoad;
     }
-    async function prepareSendspinIdentity() {
-        try {
-            var module = await loadSendspinModule();
+    function prepareSendspinIdentity() {
+        return loadSendspinModule().then(function (module) {
             var identity = module.loadSendspinClientIdentity();
             sendspinClientId = identity && identity.clientId ? identity.clientId : '';
-        } catch (e) {
+        }).catch(function () {
             sendspinClientId = '';
-        }
+        });
     }
-    async function initSendspin() {
+    function initSendspin() {
         if (!SENDSPIN || window.__sendspinPlayer) return;
         setStatus('Connecting Sendspin…');
-        try {
-            var module = await loadSendspinModule();
+        return loadSendspinModule().then(function (module) {
             var sendspinUrl = params.get('sendspin_url') || getDefaultSendspinUrl();
             var cfg = {
                 baseUrl: sendspinUrl,
@@ -1075,15 +1097,16 @@
                     maybeDisarmAudio();
                 }).catch(function () { /* the next gesture tries again */ });
             }
-            await player.connect();
+            return player.connect();
+        }).then(function () {
             setSync('synced');
             setStatus('');
-        } catch (e) {
+        }).catch(function (e) {
             setSync('error');
             setStatus('Sendspin error: ' + e.message);
             sendspinUnlocked = true;
             maybeDisarmAudio();
-        }
+        });
     }
     function wrapSendspinHooks(core) {
         // The core exposes these callbacks as setters only. Read the stored
@@ -1120,14 +1143,15 @@
         el.textContent = state === 'synced' ? 'SYNC' : state === 'error' ? 'ERROR' : 'SYNCING…';
     }
 
-    async function boot() {
+    function boot() {
         document.body.classList.add('kiosk');
         bindControls();
         renderNow();
         sync();
         syncVolume(audio.volume * 100);
         prepareAudioUnlock();
-        await prepareSendspinIdentity();
+        var ready = SENDSPIN ? prepareSendspinIdentity() : Promise.resolve();
+        ready.then(function () {
         connectWS();
         setInterval(function () { if (sendspinStreaming) paintClock(); }, 500);
         if (SHOW.party) {
@@ -1140,6 +1164,7 @@
             document.addEventListener('touchstart', showKioskControls, { passive: true });
             showKioskControls();
         }
+        });
     }
     boot();
 })();

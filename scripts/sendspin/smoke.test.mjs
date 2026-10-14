@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { createContext, SourceTextModule } from 'node:vm';
+import { createContext, runInContext } from 'node:vm';
 
 const source = await readFile(new URL('../../provider/static/web/sendspin-js/index.js', import.meta.url), 'utf8');
 
@@ -11,13 +11,8 @@ async function loadBundle(storage) {
         crypto: webcrypto, localStorage: storage, console, atob, btoa,
         TextEncoder, TextDecoder, setTimeout, clearTimeout, setInterval, clearInterval,
     });
-    const module = new SourceTextModule(source, {
-        context,
-        importModuleDynamically(specifier) { throw new Error(`Unexpected import: ${specifier}`); },
-    });
-    await module.link(specifier => { throw new Error(`Unexpected import: ${specifier}`); });
-    await module.evaluate();
-    return module.namespace;
+    runInContext(source, context);
+    return context.WebKioskSendspin;
 }
 
 function memoryStorage(entries = []) {

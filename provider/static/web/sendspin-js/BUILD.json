@@ -6,7 +6,7 @@
     "@noble/ciphers": "1.3.0"
   },
   "esbuild": "0.28.2",
-  "sha256": "1c798ab055fa29625152607aa90943cdef22a3d6cf440aa12c5e6a9a1f07c352",
+  "sha256": "f24adf34771b3a65a098cc7482964f95e51ac9dc5a758577bb97f6d7f7570bbd",
   "opusFallback": false,
   "licensePlacement": "bundle-header"
 }
