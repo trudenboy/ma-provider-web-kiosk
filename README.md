@@ -72,6 +72,7 @@ read-only **Kiosk URL** setting also contains the base player URL.
 | `remote` | off | `remote=1` enables arrow/Enter/Back navigation for TV remotes |
 | `lite` | off | `lite=1` reduces decorative effects and visualizer redraw frequency |
 | `wake_lock` | off | `wake_lock=1` requests screen wake lock when the browser supports it |
+| `fullscreen` | off | `fullscreen=1` shows an optional enter/exit fullscreen button where supported |
 | `#token=<ma-access-token>` | unset | URL fragment carrying the MA access token for controls and queue access |
 | `device_id` | stored browser identity | Explicit identity for this browser player |
 | `sendspin_url` | same host, port `8927` | Override the Sendspin connection address |
