@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.19] - 2026-10-14
 
+### Added
+
+- Optional enter/exit fullscreen button, enabled with `fullscreen=1` or the kiosk URL builder, with support for standard and vendor browser APIs.
+
 ### Fixed
 
 - The status dashboard reports the active Sendspin output's playing, paused or idle state instead of the native HTML5 output's idle state.

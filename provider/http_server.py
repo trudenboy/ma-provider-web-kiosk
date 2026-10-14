@@ -364,6 +364,7 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
 <label><input type="checkbox" id="remote"> TV remote navigation</label>
 <label><input type="checkbox" id="lite"> Lightweight visuals</label>
 <label><input type="checkbox" id="wake_lock"> Keep screen awake when supported</label>
+<label><input type="checkbox" id="fullscreen"> Fullscreen button</label>
 </div>
 <div class="row">
 <input type="password" id="token" placeholder="MA auth token (optional)">

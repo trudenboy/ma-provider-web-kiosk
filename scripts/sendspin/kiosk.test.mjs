@@ -70,6 +70,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
     const wakeRequests = [];
     const fetchCalls = [];
     const audioInstances = [];
+    const fullscreenCalls = [];
     let sdkLoads = 0;
     let activeElement = null;
     const node = () => {
@@ -203,6 +204,25 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
         performance: { now: () => now },
     });
     context.window = context;
+    if (options.fullscreen) {
+        const webkit = options.fullscreen === 'webkit';
+        const change = webkit ? 'webkitfullscreenchange' : 'fullscreenchange';
+        const element = webkit ? 'webkitFullscreenElement' : 'fullscreenElement';
+        context.document[webkit ? 'webkitFullscreenEnabled' : 'fullscreenEnabled'] = true;
+        context.document.documentElement[webkit ? 'webkitRequestFullscreen' : 'requestFullscreen'] = () => {
+            fullscreenCalls.push('enter');
+            if (options.fullscreen === 'reject') return Promise.reject(new Error('Fullscreen denied'));
+            context.document[element] = context.document.documentElement;
+            (documentEvents.get(change) || []).forEach(callback => callback());
+            return webkit ? undefined : Promise.resolve();
+        };
+        context.document[webkit ? 'webkitExitFullscreen' : 'exitFullscreen'] = () => {
+            fullscreenCalls.push('exit');
+            context.document[element] = null;
+            (documentEvents.get(change) || []).forEach(callback => callback());
+            return webkit ? undefined : Promise.resolve();
+        };
+    }
     context.addEventListener = (type, callback) => {
         if (!windowEvents.has(type)) windowEvents.set(type, []);
         windowEvents.get(type).push(callback);
@@ -230,8 +250,69 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
         startupError = error;
     }
     await new Promise(resolve => setImmediate(resolve));
-    return { sockets, socketInstances, storage, startupError, elements, apiCalls, intervals, documentEvents, windowEvents, timers, wakeRequests, fetchCalls, sdkLoads, root: context.document.documentElement, location: context.location, context, frames, audioInstances, advance: ms => { now += ms; }, resize: width => { context.innerWidth = width; (windowEvents.get('resize') || []).forEach(callback => callback()); } };
+    return { sockets, socketInstances, storage, startupError, elements, apiCalls, intervals, documentEvents, windowEvents, timers, wakeRequests, fullscreenCalls, fetchCalls, sdkLoads, root: context.document.documentElement, location: context.location, context, frames, audioInstances, advance: ms => { now += ms; }, resize: width => { context.innerWidth = width; (windowEvents.get('resize') || []).forEach(callback => callback()); } };
 }
+
+for (const api of ['standard', 'webkit']) {
+    test(`optional fullscreen enters, exits and follows browser Escape (${api})`, async () => {
+        const result = await startKiosk('?sendspin=0&fullscreen=1', [], undefined, {}, { fullscreen:api });
+        const button = result.context.document.getElementById('k-fullscreen');
+        assert.ok(button);
+        assert.equal(button.classList.contains('hidden'), false);
+        assert.equal(button.getAttribute('aria-label'), 'Enter fullscreen');
+        button.click();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(result.fullscreenCalls, ['enter']);
+        assert.equal(button.getAttribute('aria-label'), 'Exit fullscreen');
+        button.click();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(result.fullscreenCalls, ['enter', 'exit']);
+        assert.equal(button.getAttribute('aria-label'), 'Enter fullscreen');
+        button.click();
+        result.context.document[api === 'webkit' ? 'webkitExitFullscreen' : 'exitFullscreen']();
+        assert.equal(button.getAttribute('aria-label'), 'Enter fullscreen');
+        assert.equal(button.getAttribute('aria-pressed'), 'false');
+    });
+}
+
+test('fullscreen is hidden by default and when the browser has no fullscreen API', async () => {
+    for (const [search, options] of [['?sendspin=0', {fullscreen:'standard'}], ['?sendspin=0&fullscreen=1', {}]]) {
+        const result = await startKiosk(search, [], undefined, {}, options);
+        assert.equal(result.context.document.getElementById('k-fullscreen').classList.contains('hidden'), true);
+        assert.equal(result.fullscreenCalls.length, 0);
+    }
+});
+
+test('a rejected fullscreen request leaves playback controls usable', async () => {
+    const result = await startKiosk('?sendspin=0&fullscreen=1&controls=1', [], undefined, {}, {fullscreen:'reject'});
+    const button = result.context.document.getElementById('k-fullscreen');
+    button.click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(button.getAttribute('aria-label'), 'Enter fullscreen');
+    assert.equal(result.elements.get('kiosk-status').textContent, 'Fullscreen unavailable');
+    assert.equal(result.root.classList.contains('controls'), true);
+});
+
+test('the URL builder enables the optional fullscreen button without changing default Sendspin', async () => {
+    const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
+    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'lite', 'wake_lock', 'fullscreen', 'token', 'device_id', 'sendspin_url'].map(id => [id, {value:'', checked:false, dataset:{}, select(){}}]));
+    nodes.get('url').dataset.base = 'http://192.168.10.10:8098';
+    const events = new Map();
+    runInContext(builder, createContext({
+        URL, navigator:{}, window:{open(){}},
+        document:{getElementById:id => nodes.get(id), querySelector:() => ({value:'sendspin'}), addEventListener:(name, cb) => events.set(name, cb)},
+    }));
+    assert.equal(nodes.get('url').value, 'http://192.168.10.10:8098/kiosk');
+    nodes.get('fullscreen').checked = true;
+    events.get('change')();
+    assert.equal(nodes.get('url').value, 'http://192.168.10.10:8098/kiosk?fullscreen=1');
+});
+
+test('Sendspin transport navigation preserves the fullscreen option', async () => {
+    const result = await startKiosk('?sendspin=0&fullscreen=1');
+    result.socketInstances[0].onmessage({ data:JSON.stringify({type:'sendspin', url:'/kiosk?sendspin=1'}) });
+    assert.equal(new URL(result.location.href, 'http://192.168.10.10:8098').searchParams.get('fullscreen'), '1');
+});
 
 test('HTML5 registers without crypto or loading Sendspin', async () => {
     const result = await startKiosk('?sendspin=0', [], undefined, {}, { fakeSdk: true, noCrypto: true });
