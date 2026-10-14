@@ -788,3 +788,12 @@ test("browser reports HTML5 and active Sendspin volume capabilities", async () =
     player.core.onStreamEnd();
     assert.deepEqual(socket.sent.at(-1), { type:"capabilities", volume_control:false });
 });
+
+
+test("Sendspin identifies the same browser model reported by MA", async () => {
+    const result = await startKiosk("", [], undefined, {}, { fakeSdk:true });
+    result.socketInstances[0].onmessage({ data:JSON.stringify({ type:"welcome", player_id:"wk-browser",
+        device_info:{ model:"Chrome 129 (Linux)" } }) });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(result.context.__sendspinPlayer.config.productName, "Web Kiosk / Chrome 129 (Linux)");
+});
