@@ -925,3 +925,53 @@ test("Sendspin identifies the same browser model reported by MA", async () => {
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(result.context.__sendspinPlayer.config.productName, "Web Kiosk / Chrome 129 (Linux)");
 });
+
+
+test('Sendspin media generations display lyrics without starting HTML5 audio', async () => {
+    const result = await startKiosk('?lyrics=1', [], undefined, {}, { fakeSdk:true, width:1280 });
+    const message = data => result.socketInstances[0].onmessage({data:JSON.stringify(data)});
+    message({type:'welcome', player_id:'wk-group'});
+    await new Promise(resolve => setImmediate(resolve));
+    result.context.__sendspinPlayer.core.onStreamStart();
+    const audio = result.audioInstances[0];
+    const source = audio.src;
+    message({type:'media', wave_seq:1, title:'Group track', duration:180});
+    message({type:'lyrics', seq:1, lines:[{t:0, text:'Group lyrics'}]});
+    assert.equal(result.elements.get('kiosk-lyrics').classList.contains('hidden'), false);
+    assert.equal(result.elements.get('kiosk-lyrics').children[0].children[0].textContent, 'Group lyrics');
+    message({type:'media', wave_seq:2, title:'Next track', duration:180});
+    assert.equal(result.elements.get('kiosk-lyrics').classList.contains('hidden'), true);
+    message({type:'lyrics', seq:1, lines:[{t:0, text:'Obsolete'}]});
+    assert.equal(result.elements.get('kiosk-lyrics').classList.contains('hidden'), true);
+    assert.equal(audio.src, source);
+});
+
+test('optional group label follows membership and uses plain text', async () => {
+    for (const search of ['?show_group=1', '']) {
+        const result = await startKiosk(search);
+        const label = result.context.document.getElementById('kiosk-group');
+        const message = data => result.socketInstances[0].onmessage({data:JSON.stringify(data)});
+        message({type:'group', group_id:'group', group_name:'Living room'});
+        assert.equal(label.classList.contains('hidden'), !search);
+        assert.equal(label.textContent, 'Living room');
+        message({type:'group', group_id:'group', group_name:'<Renamed>'});
+        assert.equal(label.textContent, '<Renamed>');
+        message({type:'group', group_id:null, group_name:null});
+        assert.equal(label.classList.contains('hidden'), true);
+    }
+});
+
+
+test('builder and Sendspin navigation retain optional group display', async () => {
+    const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
+    const nodes = new Map(['url','copy','open','controls','party','viz','lyrics','queue','show_player_id','show_group','remote','lite','wake_lock','fullscreen','token','device_id','sendspin_url'].map(id => [id,{value:'',checked:false,dataset:{},select(){}}]));
+    nodes.get('url').dataset.base = 'http://192.168.10.10:8098';
+    const events = new Map();
+    runInContext(builder, createContext({URL,navigator:{},window:{open(){}},document:{getElementById:id=>nodes.get(id),querySelector:()=>({value:'sendspin'}),addEventListener:(name,cb)=>events.set(name,cb)}}));
+    nodes.get('show_group').checked = true;
+    events.get('change')();
+    assert.equal(new URL(nodes.get('url').value).searchParams.get('show_group'), '1');
+    const result = await startKiosk('?sendspin=0&show_group=1');
+    result.socketInstances[0].onmessage({data:JSON.stringify({type:'sendspin',url:'/kiosk?sendspin=1'})});
+    assert.equal(new URL(result.location.href,'http://192.168.10.10:8098').searchParams.get('show_group'), '1');
+});

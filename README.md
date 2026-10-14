@@ -69,6 +69,7 @@ read-only **Kiosk URL** setting also contains the base player URL.
 | `lyrics` | off | `lyrics=1` enables lyric lines when available |
 | `queue` | off | `queue=1` enables the queue display; requires a token |
 | `show_player_id` | off | `show_player_id=1` adds a selectable ID badge |
+| `show_group` | off | `show_group=1` shows the current MA group name; hidden for standalone players |
 | `remote` | off | `remote=1` enables arrow/Enter/Back navigation for TV remotes |
 | `lite` | off | `lite=1` reduces decorative effects and visualizer redraw frequency |
 | `wake_lock` | off | `wake_lock=1` requests screen wake lock when the browser supports it |
