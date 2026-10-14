@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.11] - 2026-10-14
+
+### Changed
+
+- Stop notifications are informational and cannot cancel a stop already completed in Music Assistant.
+
+### Fixed
+
+- Browser completion messages identify their playback instance, so late or repeated messages cannot skip replacement tracks, including short tracks and playback after a seek.
+
 ## [1.0.10] - 2026-10-14
 
 ### Fixed

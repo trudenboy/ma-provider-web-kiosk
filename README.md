@@ -105,7 +105,7 @@ not grant the player page access to playback controls: supply its token separate
 |-----|---------|-------------|
 | `http_port` | `8098` | Port for the embedded kiosk HTTP server |
 | `player_idle_timeout` | `30` | Unregister disconnected idle players after this many minutes |
-| `show_stop_notification` | `false` | Ask for confirmation before closing playback |
+| `show_stop_notification` | `false` | Show an informational notice after playback stops |
 | `enable_sendspin_bridge` | `true` | Enable experimental Sendspin integration |
 | `url_builder_require_auth` | `false` | Require MA sign-in for the builder and player list |
 | `kiosk_url` | read-only | Copyable canonical `/kiosk` URL |
@@ -124,6 +124,8 @@ Choose another codec only if the browser supports it.
 - If no player appears, check that Web Kiosk is enabled, the kiosk page connects
   successfully, and the browser console/MA logs show no connection errors.
   Loading the MA frontend alone does not open this kiosk player.
+- Reload open kiosk pages after updating the provider so they use the current
+  playback protocol and browser assets.
 - If the player appears but is silent, tap the page to unlock audio and start
   playback again. A reload requires audio to be unlocked again.
 - Sendspin integration is experimental. Complete any pairing prompt shown by
