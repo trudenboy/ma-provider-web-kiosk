@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Coroutine
 from copy import deepcopy
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -262,7 +262,7 @@ async def test_kiosk_state_follows_incoming_sendspin_group(
     )
     leader_client.roles_by_family.return_value = []
     clients = {CLIENT_ID: client, leader_id: leader_client}
-    sendspin.server_api.get_client.side_effect = clients.get
+    cast("Mock", sendspin.server_api).get_client.side_effect = clients.get
     leader = SendspinPlayer(sendspin, leader_id, initial_hello=leader_hello)
     await registry.register(leader)
     native = SendspinPlayer(sendspin, CLIENT_ID, initial_hello=client.info)
