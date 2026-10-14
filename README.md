@@ -168,7 +168,8 @@ For slower panels, add `lite=1`. Optional `wake_lock=1` can keep the screen awak
 on supported secure origins; denial does not prevent playback. Configure the
 native kiosk application's screen/sleep settings when this API is unavailable.
 HTML5 on devices with hardware-only media volume shows **Device** instead of a
-software volume percentage. Connections and audio contexts are rechecked when
+software volume percentage, and MA hides unsupported volume controls. Active
+Sendspin playback retains software volume control. Connections and audio contexts are rechecked when
 the page/network returns; an additional tap may still be required by the browser.
 
 Actual TV codecs, remote events, screen sleep and long-running playback need
@@ -191,5 +192,3 @@ uv run ruff check provider/
 uv run mypy provider/
 pre-commit run --all-files
 ```
-
-Browsers with hardware-only volume do not advertise MA software volume control during HTML5 playback. Active Sendspin playback retains software volume control.
