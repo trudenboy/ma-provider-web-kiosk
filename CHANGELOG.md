@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.18] - 2026-10-14
+
+### Fixed
+
+- Incoming Sendspin group playback selects the browser's linked output so MA shows its playback state instead of idle.
+- Kiosk displays Sendspin track metadata and artwork without requiring a separate HTML5 playback notification; pause retains the track and stop clears it.
+- Sendspin format updates no longer restart the initial-audio fallback timer and disconnect a browser that has already received audio.
+
 ## [1.0.17] - 2026-10-14
 
 ### Fixed

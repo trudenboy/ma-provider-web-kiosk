@@ -9,6 +9,53 @@ const sdkSource = await readFile(new URL('../../provider/static/web/sendspin-js/
 const html = await readFile(new URL('../../provider/static/web/index.html', import.meta.url), 'utf8');
 const elementIds = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]));
 
+test('group Sendspin playback shows SDK metadata without a native kiosk play message', async () => {
+    const result = await startKiosk('?controls=1', [], undefined, {}, { fakeSdk:true });
+    result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'welcome', player_id:'wk-group' }) });
+    await new Promise(resolve => setImmediate(resolve));
+    const player = result.context.__sendspinPlayer;
+    player.core.onStreamStart();
+    player.config.onStateChange({
+        isPlaying:true, volume:65, serverState:{ metadata:{ title:'Group track', artist:'Group artist', artwork_url:'http://ma.local/cover', progress:{ track_duration:180000, track_progress:25000, playback_speed:1 } } },
+        groupState:{ playback_state:'playing' },
+    });
+    assert.equal(result.elements.get('kiosk-title').textContent, 'Group track');
+    assert.equal(result.elements.get('kiosk-artist').textContent, 'Group artist');
+    assert.equal(result.elements.get('k-play').getAttribute('aria-label'), 'Pause');
+    assert.equal(result.elements.get('kiosk-art').src, 'http://ma.local/cover');
+});
+
+test('Sendspin format updates do not restart the initial-audio fallback timer', async () => {
+    const result = await startKiosk('', [], undefined, {}, { fakeSdk:true });
+    result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'welcome', player_id:'wk-format' }) });
+    await new Promise(resolve => setImmediate(resolve));
+    const player = result.context.__sendspinPlayer;
+    player.core.onStreamStart({}, false);
+    player.core.onAudioData({});
+    player.core.onStreamStart({}, true);
+    result.advance(11000);
+    result.intervals.filter(interval => interval.delay === 1000).forEach(interval => interval.callback());
+    assert.equal(player.disconnected, undefined);
+    assert.equal(result.context.__sendspinPlayer, player);
+});
+
+test('group pause retains metadata and group stop clears it after the audio stream ends', async () => {
+    const result = await startKiosk('?controls=1', [], undefined, {}, { fakeSdk:true });
+    result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'welcome', player_id:'wk-group' }) });
+    await new Promise(resolve => setImmediate(resolve));
+    const player = result.context.__sendspinPlayer;
+    const metadata = { title:'Group track', artist:'Group artist' };
+    player.core.onStreamStart({}, false);
+    player.config.onStateChange({ isPlaying:true, serverState:{metadata} });
+    player.config.onStateChange({ isPlaying:false, serverState:{metadata} });
+    assert.equal(result.elements.get('k-play').getAttribute('aria-label'), 'Play');
+    assert.equal(result.elements.get('kiosk-title').textContent, 'Group track');
+    player.core.onStreamEnd();
+    player.config.onStateChange({ isPlaying:false, serverState:{} });
+    assert.equal(result.elements.get('kiosk-title').textContent, 'wk-group');
+    assert.equal(result.elements.get('kiosk-art').src, '/web/sendspin.svg');
+});
+
 async function startKiosk(search, entries = [], randomUUID, partyState = {}, options = {}) {
     const storage = new Map(entries);
     const frames = [];

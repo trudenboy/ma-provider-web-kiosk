@@ -12,10 +12,10 @@ import pytest
 from aiosendspin.models.core import ClientHelloPayload
 from aiosendspin.models.core import DeviceInfo as SendspinDeviceInfo
 from aiosendspin.models.player import ClientHelloPlayerSupport, SupportedAudioFormat
-from aiosendspin.models.types import AudioCodec
-from aiosendspin.server import ClientUpdatedEvent
+from aiosendspin.models.types import AudioCodec, PlaybackStateType
+from aiosendspin.server import ClientUpdatedEvent, GroupStateChangedEvent
 from music_assistant_models.config_entries import PlayerConfig
-from music_assistant_models.enums import IdentifierType, PlayerFeature, PlayerType
+from music_assistant_models.enums import IdentifierType, PlaybackState, PlayerFeature, PlayerType
 
 from music_assistant.controllers.players import PlayerController
 from music_assistant.providers.sendspin.player import SendspinPlayer
@@ -234,3 +234,34 @@ async def test_explicit_kiosk_removal_deletes_persisted_config(
     assert registry.get_player(kiosk.player_id) is None
     assert mass_mock.config.get("players/wk_delete") is None
     await asyncio.gather(*tasks)
+
+
+async def test_kiosk_state_follows_incoming_sendspin_group(
+    provider: WebKioskProvider,
+    browser_registry: tuple[
+        PlayerController, SendspinProvider, UniversalPlayerProvider, Mock, list[asyncio.Task[Any]]
+    ],
+) -> None:
+    """The MA-visible state follows an active linked output through group playback changes."""
+    registry, sendspin, _universal, client, tasks = browser_registry
+    native = SendspinPlayer(sendspin, CLIENT_ID, initial_hello=client.info)
+    await registry.register(native)
+    manager = WebKioskSendspinBridgeManager(provider)
+    provider.sendspin_bridge_enabled = True
+    provider.bridge_manager = manager
+    kiosk = await provider.get_or_register_player("wk_group", sendspin_client_id=CLIENT_ID)
+    assert kiosk is not None
+    client.group.clients = [client]
+    try:
+        for group_state, expected in (
+            (PlaybackStateType.PLAYING, PlaybackState.PLAYING),
+            (PlaybackStateType.PAUSED, PlaybackState.PAUSED),
+            (PlaybackStateType.STOPPED, PlaybackState.IDLE),
+        ):
+            native.group_event_cb(client.group, GroupStateChangedEvent(group_state))
+            kiosk.refresh_state()
+            assert kiosk.state.playback_state == expected
+    finally:
+        await manager.close()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await native.on_unload()
