@@ -68,6 +68,7 @@
     if (TOKEN) LS.set('wk_token', TOKEN);
 
     var playerId = '';
+    var customName = '';
     var serverVersion = '';
     var browserModel = 'Web browser';
     var hasTrack = false;
@@ -309,6 +310,7 @@
             case 'welcome':
                 if (msg.device_info && typeof msg.device_info.model === 'string') browserModel = msg.device_info.model;
                 playerId = msg.player_id;
+                customName = typeof msg.custom_name === 'string' ? msg.custom_name : '';
                 serverVersion = typeof msg.server_version === 'string' ? msg.server_version : '';
                 renderNow();
                 var playerLabel = document.getElementById('kiosk-player-id');
@@ -320,6 +322,10 @@
                 if (TOKEN) { fetchQueue(); fetchParty(); }
                 if (SENDSPIN) initSendspin();
                 if (audio.ended) reportTrackEnded();
+                break;
+            case 'player':
+                customName = typeof msg.custom_name === 'string' ? msg.custom_name : '';
+                if (!hasTrack) renderNow();
                 break;
             case 'group':
                 var groupLabel = document.getElementById('kiosk-group');
@@ -571,7 +577,7 @@
     function renderNow() {
         var src = current.image ? imageUrl({ image: current.image }) : '';
         var logo = SENDSPIN ? '/web/sendspin.svg' : '/web/html5.svg';
-        var title = hasTrack ? current.title || '—' : playerId || 'Connecting…';
+        var title = hasTrack ? current.title || '—' : customName || playerId || 'Connecting…';
         var artist = hasTrack ? current.artist || '—' : 'Music Assistant' + (serverVersion ? ' ' + serverVersion : '');
         var box = document.getElementById('kiosk-artbox');
         var art = document.getElementById('kiosk-art');

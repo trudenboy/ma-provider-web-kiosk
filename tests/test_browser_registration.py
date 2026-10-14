@@ -509,3 +509,34 @@ async def test_group_websocket_follows_membership_and_name(  # noqa: PLR0915
         await asyncio.gather(*tasks, return_exceptions=True)
         await native.on_unload()
         await leader.on_unload()
+
+
+async def test_custom_name_reaches_browser_on_connect_and_rename(
+    provider: WebKioskProvider,
+    browser_registry: tuple[
+        PlayerController, SendspinProvider, UniversalPlayerProvider, Mock, list[asyncio.Task[Any]]
+    ],
+) -> None:
+    """Configured names reach the kiosk while its technical Player ID stays stable."""
+    registry, _sendspin, _universal, _client, tasks = browser_registry
+    kiosk = await provider.get_or_register_player("wk_custom")
+    assert kiosk is not None
+    kiosk.set_config(replace(kiosk.config, name="Kitchen"))
+    server = WebKioskHTTPServer(provider, 0)
+    provider.http_server = server
+    async with TestClient(TestServer(server.app)) as http:
+        ws = await http.ws_connect("/ws?device_id=custom")
+        welcome = await ws.receive_json()
+        assert welcome["player_id"] == "wk_custom"
+        assert welcome["custom_name"] == "Kitchen"
+        for name in ("Bedroom", kiosk.name, None):
+            await registry.on_player_config_change(replace(kiosk.config, name=name), {"name"})
+            async with asyncio.timeout(1):
+                while True:
+                    message = await ws.receive_json()
+                    if message.get("type") == "player":
+                        break
+            assert message["custom_name"] == name
+        await ws.close()
+    provider.cancel_all_player_closes()
+    await asyncio.gather(*tasks, return_exceptions=True)

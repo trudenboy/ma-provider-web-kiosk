@@ -975,3 +975,22 @@ test('builder and Sendspin navigation retain optional group display', async () =
     result.socketInstances[0].onmessage({data:JSON.stringify({type:'sendspin',url:'/kiosk?sendspin=1'})});
     assert.equal(new URL(result.location.href,'http://192.168.10.10:8098').searchParams.get('show_group'), '1');
 });
+
+
+for (const mode of ['0', '1']) test(`custom player name replaces idle ID in HTML5/Sendspin (${mode})`, async () => {
+    const result = await startKiosk('?sendspin=' + mode + '&show_player_id=1');
+    const message = data => result.socketInstances[0].onmessage({data:JSON.stringify(data)});
+    message({type:'welcome', player_id:'wk-test', custom_name:'Kitchen'});
+    assert.equal(result.elements.get('kiosk-title').textContent, 'Kitchen');
+    assert.equal(result.elements.get('kiosk-bar-title').textContent, 'Kitchen');
+    assert.equal(result.elements.get('kiosk-player-id').textContent, 'Player ID: wk-test');
+    message({type:'player', custom_name:'<Living room>'});
+    assert.equal(result.elements.get('kiosk-title').textContent, '<Living room>');
+    message({type:'play', path:'/track', title:'Song', duration:180});
+    message({type:'player', custom_name:'Bedroom'});
+    assert.equal(result.elements.get('kiosk-title').textContent, 'Song');
+    message({type:'stop'});
+    assert.equal(result.elements.get('kiosk-title').textContent, 'Bedroom');
+    message({type:'player', custom_name:null});
+    assert.equal(result.elements.get('kiosk-title').textContent, 'wk-test');
+});

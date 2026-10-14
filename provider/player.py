@@ -201,6 +201,13 @@ class WebKioskPlayer(Player):
         if self.initialized.is_set():
             self.update_state()
 
+    async def on_config_updated(self) -> None:
+        """Publish configured-name changes even when the effective name stays the same."""
+        await super().on_config_updated()
+        provider = cast("WebKioskProvider", self.provider)
+        if provider.http_server:
+            provider.http_server.broadcast_player_name(self)
+
     async def play_media(self, media: PlayerMedia) -> None:
         """Handle PLAY MEDIA command — store media for the kiosk to fetch."""
         self.logger.info("play_media on %s: uri=%s", self.display_name, media.uri)

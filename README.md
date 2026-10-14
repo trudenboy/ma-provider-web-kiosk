@@ -78,9 +78,10 @@ read-only **Kiosk URL** setting also contains the base player URL.
 | `device_id` | stored browser identity | Explicit identity for this browser player |
 | `sendspin_url` | same host, port `8927` | Override the Sendspin connection address |
 
-The Player ID in the idle main title is always shown, independently of
-`show_player_id`. `/web` remains a player URL alias; the old `kiosk=1` parameter
-is accepted but is no longer needed.
+The idle main title and mini-player show the custom player name from MA when set,
+otherwise the Player ID. Renaming updates connected pages. The optional
+`show_player_id` badge always shows the technical ID. `/web` remains a player URL
+alias; the old `kiosk=1` parameter is accepted but is no longer needed.
 
 Examples (replace the host and token):
 

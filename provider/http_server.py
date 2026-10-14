@@ -89,6 +89,7 @@ class WebKioskHTTPServer:
         self.app.on_cleanup.append(self._unsubscribe_player_updates)
         self._unsubscribe_state_updates: Callable[[], None] | None = None
         self._media_signatures: dict[str, tuple[Any, ...]] = {}
+        self._player_names: dict[str, str | None] = {}
         self._group_signatures: dict[str, tuple[str | None, str | None]] = {}
         self._runner: web.AppRunner | None = None
         self._ws_clients: dict[str, set[web.WebSocketResponse]] = {}
@@ -185,6 +186,19 @@ class WebKioskHTTPServer:
         for ws in list(clients):
             if not ws.closed:
                 self.provider.mass.create_task(self._ws_send(ws, msg, player_id))
+
+    def broadcast_player_name(self, player: WebKioskPlayer) -> None:
+        """Send configured display-name changes to connected kiosk pages."""
+        if player.player_id not in self._ws_clients:
+            return
+        name = player.config.name
+        if player.player_id in self._player_names and self._player_names[player.player_id] == name:
+            return
+        self._player_names[player.player_id] = name
+        message = json.dumps({"type": "player", "custom_name": name})
+        for ws in tuple(self._ws_clients.get(player.player_id, set())):
+            if not ws.closed:
+                self.provider.mass.create_task(self._ws_send(ws, message, player.player_id))
 
     def broadcast_media(self, player_id: str, seq: int, media: PlayerMedia | None) -> None:
         """Send effective track metadata without opening an HTML5 audio stream."""
@@ -309,6 +323,7 @@ class WebKioskHTTPServer:
             self._unsubscribe_state_updates()
             self._unsubscribe_state_updates = None
         self._media_signatures.clear()
+        self._player_names.clear()
         self._group_signatures.clear()
 
     def _on_player_state_updated(
@@ -316,6 +331,7 @@ class WebKioskHTTPServer:
     ) -> None:
         """Publish effective Sendspin track changes to this server's connected browsers."""
         if isinstance(player, WebKioskPlayer) and player.player_id in self._ws_clients:
+            self.broadcast_player_name(player)
             self._publish_effective_media(player)
         for player_id in tuple(self._ws_clients):
             kiosk = self.provider.mass.players.get_player(player_id)
@@ -576,12 +592,15 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
                 player.on_ws_connected()
             # Tell the kiosk its server-derived player_id so it can target MA
             # JSON-RPC playback commands before the first "play" push arrives.
+            custom_name = player.config.name if player else None
+            self._player_names[player_id] = custom_name
             await self._ws_send(
                 ws,
                 json.dumps(
                     {
                         "type": "welcome",
                         "player_id": player_id,
+                        "custom_name": custom_name,
                         "server_version": self.provider.mass.version,
                         "device_info": {
                             "model": player.device_info.model,
@@ -606,6 +625,7 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
             self._update_volume_support(player_id)
             if not self._ws_clients.get(player_id):
                 self._media_signatures.pop(player_id, None)
+                self._player_names.pop(player_id, None)
                 self._group_signatures.pop(player_id, None)
                 self._ws_clients.pop(player_id, None)
                 offline_player = self.provider.mass.players.get_player(player_id)
