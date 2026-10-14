@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.12] - 2026-10-14
+
+### Changed
+
+- Party QR data is obtained through Music Assistant's registered API commands instead of calling another provider directly.
+- Provider and Sendspin setting descriptions no longer advertise an outdated MA release.
+
+### Fixed
+
+- Sendspin bridge registration accepts only canonical 43-character browser public-key identities.
+- Bridge shutdown waits for cancelled fallback transfers, including watchdogs replaced by a new stream, before removing the client.
+- Player teardown reports unexpected errors instead of silently swallowing them.
+- Removed unused per-client URL-prefix storage that accumulated after browser disconnections.
+
 ## [1.0.11] - 2026-10-14
 
 ### Changed
