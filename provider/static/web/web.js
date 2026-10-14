@@ -4,7 +4,14 @@
 
     var params = new URLSearchParams(location.search);
     // /kiosk is the player; /web and kiosk=1 remain compatible aliases.
-    var SENDSPIN = params.get('sendspin') !== '0';
+    var REQUESTED_SENDSPIN = params.get('sendspin') !== '0';
+    var SENDSPIN = REQUESTED_SENDSPIN && supportsSendspin();
+    if (SENDSPIN && location.protocol === 'https:') {
+        try {
+            var endpoint = new URL(params.get('sendspin_url') || getDefaultSendspinUrl());
+            SENDSPIN = endpoint.protocol === 'https:' || endpoint.protocol === 'wss:';
+        } catch (e) { SENDSPIN = false; }
+    }
     if (SENDSPIN) document.documentElement.classList.add('sendspin');
     var FLAG = function (name) { return params.get(name) === '1'; };
     var REMOTE = FLAG('remote');
@@ -12,10 +19,16 @@
     document.documentElement.classList.toggle('controls', SHOW.controls);
     document.documentElement.classList.toggle('no-grid', !window.CSS || !CSS.supports || !CSS.supports('display', 'grid'));
 
+    var memoryStorage = Object.create(null);
     var LS = {
-        get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
-        set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* noop */ } }
+        get: function (k) {
+            if (Object.prototype.hasOwnProperty.call(memoryStorage, k)) return memoryStorage[k];
+            try { memoryStorage[k] = localStorage.getItem(k); } catch (e) { memoryStorage[k] = null; }
+            return memoryStorage[k];
+        },
+        set: function (k, v) { memoryStorage[k] = String(v); try { localStorage.setItem(k, String(v)); } catch (e) { /* memory is retained for this page */ } }
     };
+    var sdkStorage = { getItem:LS.get, setItem:LS.set };
     var deviceId = params.get('device_id') || LS.get('wk_device_id');
     if (!deviceId) { deviceId = createDeviceId(); LS.set('wk_device_id', deviceId); }
 
@@ -35,6 +48,8 @@
     var sendspinModule = null;
     // True only while the Sendspin server is actually streaming audio here.
     var sendspinStreaming = false;
+    var sendspinAudioAt = 0;
+    var sendspinReceivedAudio = false;
     var MA_URL = (params.get('ma_url') || LS.get('wk_ma_url') || '').replace(/\/$/, '');
     var fragment = new URLSearchParams(location.hash.slice(1));
     var TOKEN = fragment.get('token') || params.get('token') || LS.get('wk_token') || '';
@@ -73,6 +88,12 @@
 
     var audio = new Audio();
     audio.volume = 1;
+    var mediaVolumeWritable = true;
+    try {
+        audio.volume = 0.5;
+        mediaVolumeWritable = Math.abs(audio.volume - 0.5) < 0.01;
+        audio.volume = 1;
+    } catch (e) { mediaVolumeWritable = false; }
     // Browsers withhold sound until the document receives a tap or a key.
     // That one gesture covers later tracks. A reload asks again.
     var AUDIO_PROMPT = 'Tap or press a key to start audio';
@@ -265,6 +286,7 @@
                 break;
             case 'volume':
                 audio.volume = (msg.level || 0) / 100;
+                if (sendspinStreaming && window.__sendspinPlayer) window.__sendspinPlayer.setVolume(msg.level || 0);
                 syncVolume(msg.level || 0);
                 break;
             case 'wave':
@@ -516,7 +538,7 @@
         playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
         playBtn.title = playing ? 'Pause' : 'Play';
         ['k-play', 'k-prev', 'k-next', 'k-volume-button', 'kiosk-volume'].forEach(function (id) {
-            document.getElementById(id).disabled = !playerId;
+            document.getElementById(id).disabled = !playerId || (id === 'kiosk-volume' && !sendspinStreaming && !mediaVolumeWritable);
         });
         // Freeze the Sendspin clock at the pause so the bars stay on that moment.
         if (sendspinStreaming && vizWasPlaying && !playing && waveAnchorAt) {
@@ -921,8 +943,10 @@
         });
     }
     function applyVolume(level, immediate) {
+        if (!sendspinStreaming && !mediaVolumeWritable) { setStatus('Use the device volume buttons'); return; }
         level = Math.max(0, Math.min(100, Math.round(level)));
         audio.volume = level / 100;
+        if (sendspinStreaming && window.__sendspinPlayer) window.__sendspinPlayer.setVolume(level);
         syncVolume(level);
         clearTimeout(volumeTimer);
         var send = function () {
@@ -933,6 +957,13 @@
     }
 
     function syncVolume(level) {
+        if (!sendspinStreaming && !mediaVolumeWritable) {
+            document.getElementById('kiosk-volume').disabled = true;
+            document.getElementById('k-volume-level').textContent = 'Device';
+            document.getElementById('k-volume-panel-level').textContent = 'Device';
+            document.getElementById('k-volume-button').setAttribute('aria-label', 'Use device volume buttons');
+            return;
+        }
         level = Math.max(0, Math.min(100, Math.round(level)));
         var slider = document.getElementById('kiosk-volume');
         slider.value = String(level);
@@ -1085,6 +1116,26 @@
     function getDefaultSendspinUrl() {
         return 'http://' + location.hostname + ':8927';
     }
+    function supportsSendspin() {
+        return typeof BigInt === 'function' && typeof DataView.prototype.getBigInt64 === 'function'
+            && typeof AudioContext === 'function' && typeof TextEncoder === 'function'
+            && typeof TextDecoder === 'function' && typeof crypto !== 'undefined'
+            && typeof crypto.getRandomValues === 'function';
+    }
+    function useHtml5() {
+        SENDSPIN = false;
+        sendspinClientId = '';
+        sendspinStreaming = false;
+        sendspinUnlocked = true;
+        var failed = window.__sendspinPlayer;
+        window.__sendspinPlayer = null;
+        if (failed && typeof failed.disconnect === 'function') failed.disconnect();
+        document.documentElement.classList.remove('sendspin');
+        setSync('fallback');
+        renderNow();
+        maybeDisarmAudio();
+        setStatus('');
+    }
     function showPairPin(pin) {
         var el = document.getElementById('kiosk-pair');
         if (!el) return;
@@ -1111,30 +1162,72 @@
     }
     function prepareSendspinIdentity() {
         return loadSendspinModule().then(function (module) {
-            var identity = module.loadSendspinClientIdentity();
+            var identity = module.loadSendspinClientIdentity(sdkStorage);
             sendspinClientId = identity && identity.clientId ? identity.clientId : '';
         }).catch(function () {
             sendspinClientId = '';
+            useHtml5();
         });
+    }
+    function probeWithTimeout(promise) {
+        return new Promise(function (resolve) {
+            var timer = setTimeout(function () { resolve(false); }, 1500);
+            Promise.resolve(promise).then(function (supported) { clearTimeout(timer); resolve(!!supported); }, function () { clearTimeout(timer); resolve(false); });
+        });
+    }
+    var codecProbe = null;
+    function verifiedCodecs() {
+        if (codecProbe) return codecProbe;
+        var opus = Promise.resolve(false);
+        if (window.isSecureContext && typeof AudioDecoder !== 'undefined' && typeof AudioDecoder.isConfigSupported === 'function') {
+            opus = Promise.resolve().then(function () {
+                return AudioDecoder.isConfigSupported({ codec:'opus', sampleRate:48000, numberOfChannels:2 });
+            }).then(function (result) { return result.supported; });
+        }
+        var flac = Promise.resolve(false);
+        if (typeof OfflineAudioContext !== 'undefined') {
+            flac = fetch('/web/flac-probe.flac').then(function (response) {
+                if (!response.ok) throw new Error('FLAC probe unavailable');
+                return response.arrayBuffer();
+            }).then(function (sample) {
+                var context = new OfflineAudioContext(2, 1, 48000);
+                return new Promise(function (resolve, reject) {
+                    var decoding = context.decodeAudioData(sample, resolve, reject);
+                    if (decoding && decoding.then) decoding.then(resolve, reject);
+                });
+            }).then(function (buffer) { return buffer && buffer.length > 0; });
+        }
+        codecProbe = Promise.all([probeWithTimeout(opus), probeWithTimeout(flac)]).then(function (results) {
+            var codecs = [];
+            if (results[0]) codecs.push('opus');
+            if (results[1]) codecs.push('flac');
+            codecs.push('pcm');
+            return codecs;
+        });
+        return codecProbe;
     }
     function initSendspin() {
         if (!SENDSPIN || window.__sendspinPlayer) return;
         setStatus('Connecting Sendspin…');
         return loadSendspinModule().then(function (module) {
+            return verifiedCodecs().then(function (codecs) { return { module:module, codecs:codecs }; });
+        }).then(function (verified) {
+            var module = verified.module;
             var sendspinUrl = params.get('sendspin_url') || getDefaultSendspinUrl();
             var cfg = {
                 baseUrl: sendspinUrl,
                 clientName: 'Web Kiosk',
                 productName: 'Web Kiosk',
                 correctionMode: 'sync',
+                storage: sdkStorage,
+                codecs: verified.codecs,
                 onStateChange: function (state) {
                     setSync('synced');
                     if (sendspinStreaming) { playing = state.isPlaying; sync(); }
+                    if (sendspinStreaming && typeof state.volume === 'number') syncVolume(state.volume);
                 },
                 onPairingPin: function (pin) { showPairPin(pin); }
             };
-            // The SDK bundle omits software Opus; browsers without WebCodecs use FLAC/PCM.
-            if (typeof AudioDecoder === 'undefined') cfg.codecs = ['flac', 'pcm'];
             var player = new module.SendspinPlayer(cfg);
             window.__sendspinPlayer = player;
             wrapSendspinHooks(player.core);
@@ -1149,10 +1242,8 @@
             setSync('synced');
             setStatus('');
         }).catch(function (e) {
-            setSync('error');
-            setStatus('Sendspin error: ' + e.message);
-            sendspinUnlocked = true;
-            maybeDisarmAudio();
+            useHtml5();
+            document.getElementById('kiosk-sync').title = e.message || 'Sendspin unavailable';
         });
     }
     function wrapSendspinHooks(core) {
@@ -1166,6 +1257,8 @@
             };
         }
         chain('onStreamStart', function () {
+            sendspinAudioAt = performance.now();
+            sendspinReceivedAudio = false;
             waveAnchor = songTime();
             waveAnchorAt = performance.now();
             sendspinStreaming = true;
@@ -1183,17 +1276,19 @@
         chain('onStreamClear', function () {
             sendspinStreaming = false;
         });
+        chain('onAudioData', function () { sendspinReceivedAudio = true; });
     }
     function setSync(state) {
         var el = document.getElementById('kiosk-sync');
         el.className = state;
-        el.textContent = state === 'synced' ? 'SYNC' : state === 'error' ? 'ERROR' : 'SYNCING…';
+        el.textContent = state === 'synced' ? 'SYNC' : state === 'fallback' ? 'HTML5' : state === 'error' ? 'ERROR' : 'SYNCING…';
     }
 
     function boot() {
         document.body.classList.add('kiosk');
         bindControls();
         renderNow();
+        if (REQUESTED_SENDSPIN && !SENDSPIN) setSync('fallback');
         sync();
         syncVolume(audio.volume * 100);
         prepareAudioUnlock();
@@ -1201,6 +1296,9 @@
         ready.then(function () {
         connectWS();
         setInterval(function () { if (sendspinStreaming) paintClock(); }, 500);
+        if (SENDSPIN) setInterval(function () {
+            if (sendspinStreaming && !sendspinReceivedAudio && sendspinUnlocked && playing && performance.now() - sendspinAudioAt > 10000) useHtml5();
+        }, 1000);
         if (SHOW.party) {
             fetchParty();
             setInterval(fetchParty, 10000);

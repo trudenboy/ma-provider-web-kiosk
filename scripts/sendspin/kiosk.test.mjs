@@ -60,12 +60,19 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
     const context = createContext({
         URL, URLSearchParams, Blob, TextEncoder, TextDecoder, atob, btoa, console,
         innerWidth: options.width || 390,
-        location: { search, hash: options.hash || '', pathname: '/kiosk', protocol: 'http:', host: '192.0.2.10:8098' },
+        location: { search, hash: options.hash || '', pathname: '/kiosk', protocol: options.protocol || 'http:', hostname:'192.0.2.10', host: '192.0.2.10:8098' },
+        isSecureContext: options.secure === true,
+        AudioContext: function () {},
+        AudioDecoder: options.opusSupported !== undefined ? { isConfigSupported: async () => ({ supported:options.opusSupported }) } : undefined,
+        OfflineAudioContext: class {
+            decodeAudioData() { return options.flacSupported ? Promise.resolve({ length:960 }) : Promise.reject(new Error('FLAC unavailable')); }
+        },
+        navigator: { userAgent:'Kiosk Chrome/108', platform:'', maxTouchPoints:0 },
         history: { replaceState(_state, _title, url) { const target = new URL(url, 'http://192.0.2.10:8098'); context.location.search = target.search; context.location.hash = target.hash; } },
         crypto: options.noCrypto ? undefined : { getRandomValues: webcrypto.getRandomValues.bind(webcrypto), randomUUID },
         localStorage: {
-            getItem(key) { return storage.get(key) ?? null; },
-            setItem(key, value) { storage.set(key, value); },
+            getItem(key) { if (options.storageDenied) throw new Error('Storage denied'); return storage.get(key) ?? null; },
+            setItem(key, value) { if (options.storageDenied) throw new Error('Storage denied'); storage.set(key, value); },
         },
         document: {
             documentElement: node(), body: node(),
@@ -99,6 +106,9 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
         Audio: class {
             constructor() { audioInstances.push(this); }
             paused = true;
+            _volume = 1;
+            get volume() { return this._volume; }
+            set volume(value) { if (!options.systemVolume) this._volume = value; }
             addEventListener() {}
             play() {
                 if (options.playAllowed?.()) { this.paused = false; return Promise.resolve(); }
@@ -118,6 +128,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
         fetch: async (url, options) => {
             fetchCalls.push(url);
             if (url === '/api/party') return { ok: partyState.ok !== false, json: async () => partyState.info || {} };
+            if (url === '/web/flac-probe.flac') return { ok:true, arrayBuffer:async () => new ArrayBuffer(8) };
             if (url === '/api' && options?.body) {
                 const request = JSON.parse(options.body);
                 apiCalls.push(request);
@@ -136,12 +147,18 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
     };
     const fakeSdk = `
         window.WebKioskSendspin = {
-        loadSendspinClientIdentity: function() { return { clientId: 'a'.repeat(43) }; },
+        loadSendspinClientIdentity: function(storage) {
+            var id = storage && storage.getItem('fake-identity');
+            if (!id) { id = 'a'.repeat(43); if(storage) storage.setItem('fake-identity', id); }
+            return { clientId:id };
+        },
         SendspinPlayer: class {
-            constructor(config) { this.config = config; this.core = {}; }
+            constructor(config) { this.config = config; this.core = {}; this.clientId = config.storage && config.storage.getItem('fake-identity') || 'b'.repeat(43); }
             get trackProgress() { return this.core.trackProgress; }
             unlock() { return Promise.resolve(); }
             connect() { return Promise.resolve(); }
+            disconnect() { this.disconnected = true; }
+            setVolume(value) { this.volume = value; }
         }};
     `;
     let startupError;
@@ -200,6 +217,68 @@ test('remote arrows move focus, Enter clicks and legacy Back closes QR', async (
     party.onclick();
     key('Unidentified', 10009);
     assert.equal(party.attributes.get('aria-expanded'), 'false');
+});
+
+test('denied persistent storage keeps one identity for registration and Sendspin', async () => {
+    const result = await startKiosk('', [], undefined, {}, { fakeSdk:true, storageDenied:true });
+    result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'welcome', player_id:'wk-storage' }) });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(result.context.__sendspinPlayer.clientId,
+        new URL(result.sockets[0]).searchParams.get('sendspin_client_id'));
+});
+
+for (const [opusSupported, flacSupported, expected] of [
+    [false, false, ['pcm']], [true, false, ['opus', 'pcm']], [false, true, ['flac', 'pcm']],
+]) {
+    test(`Sendspin advertises only verified codecs (${expected.join(',')})`, async () => {
+        const result = await startKiosk('', [], undefined, {}, { fakeSdk:true, secure:true, opusSupported, flacSupported });
+        result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'welcome', player_id:'wk-codecs' }) });
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(Array.from(result.context.__sendspinPlayer.config.codecs), expected);
+    });
+}
+
+test('missing Sendspin capabilities selects HTML5 before loading the SDK', async () => {
+    const result = await startKiosk('', [], undefined, {}, { noCrypto:true, fakeSdk:true });
+    assert.equal(result.sockets.length, 1);
+    assert.equal(result.sdkLoads, 0);
+    assert.equal(result.elements.get('kiosk-art').src, '/web/html5.svg');
+});
+
+test('HTTPS without a secure Sendspin endpoint selects HTML5', async () => {
+    const result = await startKiosk('', [], undefined, {}, { protocol:'https:', fakeSdk:true });
+    assert.equal(result.sdkLoads, 0);
+    assert.equal(new URL(result.sockets[0]).protocol, 'wss:');
+    assert.equal(result.elements.get('kiosk-art').src, '/web/html5.svg');
+});
+
+test('HTML5 exposes device volume when media-element volume is not writable', async () => {
+    const result = await startKiosk('?sendspin=0&controls=1&token=test', [], undefined, {}, { systemVolume:true });
+    assert.equal(result.elements.get('kiosk-volume').disabled, true);
+    assert.equal(result.elements.get('k-volume-level').textContent, 'Device');
+});
+
+for (const receivedAudio of [false, true]) test(`initial Sendspin audio watchdog respects decoded buffers (${receivedAudio})`, async () => {
+    const result = await startKiosk('', [], undefined, {}, { fakeSdk:true });
+    result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'welcome', player_id:'wk-audio' }) });
+    await new Promise(resolve => setImmediate(resolve));
+    const player = result.context.__sendspinPlayer;
+    player.core.onStreamStart();
+    if (receivedAudio) player.core.onAudioData({ samples:[] });
+    result.advance(11000);
+    for (const interval of result.intervals.filter(item => item.delay === 1000)) interval.callback();
+    assert.equal(player.disconnected === true, !receivedAudio);
+    assert.equal(result.elements.get('kiosk-art').src, receivedAudio ? '/web/sendspin.svg' : '/web/html5.svg');
+});
+
+test('Sendspin receives volume through its own public player API', async () => {
+    const result = await startKiosk('', [], undefined, {}, { fakeSdk:true, systemVolume:true });
+    const message = data => result.socketInstances[0].onmessage({ data:JSON.stringify(data) });
+    message({ type:'welcome', player_id:'wk-volume' });
+    await new Promise(resolve => setImmediate(resolve));
+    result.context.__sendspinPlayer.core.onStreamStart();
+    message({ type:'volume', level:42 });
+    assert.equal(result.context.__sendspinPlayer.volume, 42);
 });
 
 for (const search of ['?kiosk=1', '?kiosk=1&sendspin=1']) {
@@ -403,7 +482,7 @@ test('idle project artwork supplies the same background image as the album artwo
 
 test('URL builder emits a clean kiosk URL and only selected additions', async () => {
     const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
-    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'ma_url', 'token', 'device_id'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
+    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'ma_url', 'token', 'device_id', 'sendspin_url'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
     nodes.get('url').dataset.base = 'http://192.168.10.10:8098';
     let mode = 'sendspin';
     const events = new Map();
@@ -463,7 +542,7 @@ test('fragment token is stored and removed from the visible player URL', async (
 
 test('builder puts credentials in the fragment instead of the request query', async () => {
     const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
-    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'ma_url', 'token', 'device_id'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
+    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'ma_url', 'token', 'device_id', 'sendspin_url'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
     nodes.get('url').dataset.base = 'http://192.0.2.10:8098';
     nodes.get('token').value = 'secret & token';
     runInContext(builder, createContext({

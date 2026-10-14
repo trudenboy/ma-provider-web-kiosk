@@ -354,6 +354,9 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
 <input type="text" id="device_id" placeholder="Device id (optional, stored in the browser)">
 </div>
 <div class="row">
+<input type="text" id="sendspin_url" placeholder="Sendspin URL override (optional; HTTPS page needs HTTPS/WSS)">
+</div>
+<div class="row">
 <input readonly id="url" data-base="{html_escape(prefix)}">
 <button class="btn" id="copy">Copy</button>
 <button class="btn" id="open" style="background:#2f6f3f;border-color:#2f6f3f">Open</button>

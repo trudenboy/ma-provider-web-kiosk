@@ -8,7 +8,7 @@
         ['controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote'].forEach(function (name) {
             if (document.getElementById(name).checked) target.searchParams.set(name, '1');
         });
-        ['ma_url', 'device_id'].forEach(function (name) {
+        ['ma_url', 'device_id', 'sendspin_url'].forEach(function (name) {
             var value = document.getElementById(name).value.trim();
             if (value) target.searchParams.set(name, value);
         });
