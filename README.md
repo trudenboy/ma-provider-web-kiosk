@@ -74,7 +74,6 @@ read-only **Kiosk URL** setting also contains the base player URL.
 | `wake_lock` | off | `wake_lock=1` requests screen wake lock when the browser supports it |
 | `#token=<ma-access-token>` | unset | URL fragment carrying the MA access token for controls and queue access |
 | `device_id` | stored browser identity | Explicit identity for this browser player |
-| `ma_url` | stored value, if any | MA web interface address saved by the kiosk |
 | `sendspin_url` | same host, port `8927` | Override the Sendspin connection address |
 
 The Player ID in the idle main title is always shown, independently of
@@ -169,7 +168,8 @@ For slower panels, add `lite=1`. Optional `wake_lock=1` can keep the screen awak
 on supported secure origins; denial does not prevent playback. Configure the
 native kiosk application's screen/sleep settings when this API is unavailable.
 HTML5 on devices with hardware-only media volume shows **Device** instead of a
-software volume percentage. Connections and audio contexts are rechecked when
+software volume percentage, and MA hides unsupported volume controls. Active
+Sendspin playback retains software volume control. Connections and audio contexts are rechecked when
 the page/network returns; an additional tap may still be required by the browser.
 
 Actual TV codecs, remote events, screen sleep and long-running playback need

@@ -774,3 +774,17 @@ test('audio completion echoes its play generation once and resets for a new play
     assert.equal(socket.sent.filter(item => item.type === 'ended').length, 2);
     assert.equal(socket.sent.at(-1).playback_generation, 'new-generation');
 });
+
+
+test("browser reports HTML5 and active Sendspin volume capabilities", async () => {
+    const result = await startKiosk("", [], undefined, {}, { fakeSdk:true, systemVolume:true });
+    const socket = result.socketInstances[0];
+    assert.equal(new URL(result.sockets[0]).searchParams.get("volume_control"), "0");
+    socket.onmessage({ data:JSON.stringify({ type:"welcome", player_id:"wk-volume-caps" }) });
+    await new Promise(resolve => setImmediate(resolve));
+    const player = result.context.__sendspinPlayer;
+    player.core.onStreamStart();
+    assert.deepEqual(socket.sent.at(-1), { type:"capabilities", volume_control:true });
+    player.core.onStreamEnd();
+    assert.deepEqual(socket.sent.at(-1), { type:"capabilities", volume_control:false });
+});
