@@ -4,6 +4,7 @@
    Lyrics layout follows MA's PlayerFullscreen.vue and LyricsViewer.vue. */
 :root {
   --kiosk-bar-height: calc(104px + env(safe-area-inset-bottom, 0px));
+  --kiosk-qr-size: 88px;
   --ma-surface: #181818;
   --ma-panel: #232323;
   --ma-muted: #a0a0a0;
@@ -27,6 +28,7 @@
 #kiosk-controls.visible, #kiosk-controls:focus-within, #kiosk-controls[data-volume-open="true"] { opacity:1; pointer-events:auto; }
 #kiosk-bar-track { display:flex; align-items:center; gap:12px; min-width:0; }
 #kiosk-bar-artbox { display:grid; place-items:center; position:relative; width:56px; height:56px; flex-shrink:0; border-radius:6px; background:var(--ma-panel); overflow:hidden; color:var(--ma-muted); }
+#kiosk-bar-artbox:has(#kiosk-party:not(.hidden)) { width:var(--kiosk-qr-size); height:var(--kiosk-qr-size); }
 #kiosk-bar-art { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
 #kiosk-bar-artbox.has-art > svg { display:none; }
 #kiosk-bar-meta { min-width:0; line-height:1.5; }
@@ -100,7 +102,7 @@ html:not(.controls) #kiosk-progress { display:none; }
   html.lyrics-visible #kiosk-queue { top:52px; right:12px; left:12px; width:auto; max-height:22vh; }
 }
 @media (max-width:768px) {
-  :root { --kiosk-bar-height:calc(132px + env(safe-area-inset-bottom,0px)); }
+  :root { --kiosk-bar-height:calc(132px + env(safe-area-inset-bottom,0px)); --kiosk-qr-size:84px; }
   html.controls #kiosk-controls {
     inset:auto max(12px,env(safe-area-inset-right,0px)) calc(12px + env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px));
     height:96px; grid-template-columns:minmax(0,1fr) 44px;
@@ -110,6 +112,12 @@ html:not(.controls) #kiosk-progress { display:none; }
   }
   #kiosk-bar-track { grid-column:1; grid-row:1; gap:10px; }
   #kiosk-bar-artbox { width:40px; height:40px; }
+  html.controls #kiosk-controls:has(#kiosk-party:not(.hidden)) { grid-template-columns:var(--kiosk-qr-size) minmax(0,1fr) 44px; gap:8px; padding-top:6px; padding-bottom:6px; }
+  html.controls #kiosk-controls:has(#kiosk-party:not(.hidden)) #kiosk-bar-track { display:contents; }
+  html.controls #kiosk-bar-artbox:has(#kiosk-party:not(.hidden)) { grid-column:1; grid-row:1/3; }
+  html.controls #kiosk-controls:has(#kiosk-party:not(.hidden)) #kiosk-bar-meta { grid-column:2; grid-row:1; align-self:center; }
+  html.controls #kiosk-controls:has(#kiosk-party:not(.hidden)) #kiosk-transport { grid-column:3; }
+  html.controls #kiosk-controls:has(#kiosk-party:not(.hidden)) #kiosk-volume-control { grid-column:2/-1; }
   #kiosk-bar-title { font-size:13px; }
   #kiosk-bar-artist { font-size:11px; }
   #kiosk-player-center { display:contents; }
