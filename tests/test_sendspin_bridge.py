@@ -135,7 +135,7 @@ async def test_note_sendspin_client_id_replaces_previous_bridge(
     await provider.note_sendspin_client_id(player, replacement)
 
     assert player.sendspin_client_id == replacement
-    manager.remove_bridge.assert_awaited_once_with(player.player_id, permanent=True)
+    manager.remove_bridge.assert_awaited_once_with(player.player_id, permanent=False)
 
 
 @pytest.mark.parametrize(

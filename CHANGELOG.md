@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A shared browser Sendspin identity has one kiosk owner; changing device IDs transfers ownership without letting the old kiosk delete the new bridge.
+- Closing a page or expiring an idle kiosk preserves its Sendspin settings; explicit player deletion still removes them.
 - Connections and suspended audio are rechecked when the page or network resumes; stale WebSocket callbacks cannot replace a new connection.
 - Sendspin volume controls affect the active SDK player; HTML5 devices with hardware-only volume show the device-control limitation.
 - Unsupported Sendspin browsers and insecure endpoints on HTTPS pages select HTML5; initial streams with no decoded audio also fall back.
