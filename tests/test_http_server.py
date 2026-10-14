@@ -547,3 +547,22 @@ async def test_ws_ignores_ended_without_a_playback_generation(
     await processed.wait()
     provider.track_ended.assert_not_called()
     await ws.close()
+
+
+@pytest.mark.parametrize("origin", ["https://untrusted.example", "null", "http://127.0.0.1:1"])
+async def test_legacy_ws_rejects_foreign_origin_before_registration(
+    http_client: TestClient[Any, Any], mass_mock: Mock, origin: str
+) -> None:
+    """Old browsers without Fetch Metadata cannot open a cross-origin player socket."""
+    with pytest.raises(WSServerHandshakeError) as error:
+        await http_client.ws_connect("/ws", headers={"Origin": origin})
+    assert error.value.status == 403
+    mass_mock.players.register.assert_not_awaited()
+
+
+async def test_legacy_ws_accepts_matching_origin(http_client: TestClient[Any, Any]) -> None:
+    """A same-origin legacy browser can still register without Fetch Metadata."""
+    origin = str(http_client.make_url("/")).rstrip("/")
+    ws = await http_client.ws_connect("/ws", headers={"Origin": origin})
+    assert (await ws.receive_json())["type"] == "welcome"
+    await ws.close()

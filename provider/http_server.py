@@ -703,6 +703,9 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         """
         if request.headers.get("Sec-Fetch-Site", "").lower() not in {"", "same-origin", "none"}:
             return web.json_response({"error": "Cross-site request rejected"}, status=403)
+        origin = request.headers.get("Origin")
+        if origin is not None and origin != f"{request.scheme}://{request.host}":
+            return web.json_response({"error": "Cross-site request rejected"}, status=403)
         return None
 
     def _get_kiosk_player(self, player_id: str) -> WebKioskPlayer | None:
