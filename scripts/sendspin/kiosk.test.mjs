@@ -19,6 +19,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
     const intervals = [];
     const documentEvents = new Map();
     const fetchCalls = [];
+    const audioInstances = [];
     const node = () => {
         const classes = new Set();
         return {
@@ -70,16 +71,22 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
             },
             removeEventListener() {},
         },
+        confirm: () => false,
         Audio: class {
+            constructor() { audioInstances.push(this); }
             paused = true;
             addEventListener() {}
             play() { return Promise.reject(Object.assign(new Error('Gesture required'), { name: 'NotAllowedError' })); }
             pause() { this.paused = true; }
-            removeAttribute() {}
+            removeAttribute(name) { delete this[name]; }
             getAttribute(name) { return this[name] ?? null; }
         },
         WebSocket: class {
+            static OPEN = 1;
+            readyState = 1;
+            sent = [];
             constructor(url) { sockets.push(url); socketInstances.push(this); }
+            send(data) { this.sent.push(JSON.parse(data)); }
         },
         fetch: async (url, options) => {
             fetchCalls.push(url);
@@ -118,7 +125,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
         startupError = error;
     }
     await new Promise(resolve => setImmediate(resolve));
-    return { sockets, socketInstances, storage, startupError, elements, apiCalls, intervals, documentEvents, fetchCalls, root: context.document.documentElement, location: context.location, context, frames, advance: ms => { now += ms; } };
+    return { sockets, socketInstances, storage, startupError, elements, apiCalls, intervals, documentEvents, fetchCalls, root: context.document.documentElement, location: context.location, context, frames, audioInstances, advance: ms => { now += ms; } };
 }
 
 for (const search of ['?kiosk=1', '?kiosk=1&sendspin=1']) {
@@ -433,4 +440,41 @@ test('Sendspin clock follows SDK progress again after seeking without a queue', 
     result.advance(2500);
     result.intervals.find(interval => interval.delay === 500).callback();
     assert.equal(result.elements.get('kiosk-time').textContent, '1:35');
+});
+
+
+test('server stop is applied even when a confirmation would be dismissed', async () => {
+    const result = await startKiosk('?sendspin=0');
+    const message = data => result.socketInstances[0].onmessage({ data: JSON.stringify(data) });
+    message({ type: 'welcome', player_id: 'wk-stop' });
+    message({ type: 'play', path: '/track', title: 'Playing', duration: 180 });
+    await new Promise(resolve => setImmediate(resolve));
+    const audio = result.audioInstances[0];
+    audio.paused = false;
+    message({ type: 'stop', showNotification: true });
+    assert.equal(audio.paused, true);
+    assert.equal(audio.getAttribute('src'), null);
+    assert.equal(result.elements.get('kiosk-title').textContent, 'wk-stop');
+    assert.equal(result.elements.get('kiosk-status').textContent, 'Playback stopped');
+    assert.equal(result.elements.get('k-play-icon').attributes.get('href'), '#k-icon-play');
+});
+
+
+test('audio completion echoes its play generation once and resets for a new play', async () => {
+    const result = await startKiosk('?sendspin=0');
+    const socket = result.socketInstances[0];
+    const message = data => socket.onmessage({ data: JSON.stringify(data) });
+    message({ type: 'welcome', player_id: 'wk-ended' });
+    const audio = result.audioInstances[0];
+    message({ type: 'play', path: '/old', duration: 5, playback_generation: 'old-generation' });
+    audio.ended = true;
+    audio.onended();
+    audio.onended();
+    assert.equal(socket.sent.filter(item => item.type === 'ended').length, 1);
+    assert.equal(socket.sent.at(-1).playback_generation, 'old-generation');
+    message({ type: 'play', path: '/new', duration: 5, playback_generation: 'new-generation' });
+    audio.ended = true;
+    audio.onended();
+    assert.equal(socket.sent.filter(item => item.type === 'ended').length, 2);
+    assert.equal(socket.sent.at(-1).playback_generation, 'new-generation');
 });
