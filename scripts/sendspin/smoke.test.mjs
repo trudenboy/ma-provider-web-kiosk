@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { webcrypto } from 'node:crypto';
+import { webcrypto, generateKeyPairSync, createPublicKey, diffieHellman, createHmac } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createContext, runInContext } from 'node:vm';
@@ -40,7 +40,7 @@ test('bundle loads without DOM or external imports and preserves an existing ide
     const pairingPsk = Buffer.alloc(32, 9).toString('base64url');
     const storage = memoryStorage([['sendspin-identity-sk', secret], ['sendspin-pairing-psk', pairingPsk]]);
     const sdk = await loadBundle(storage);
-    assert.deepEqual(Object.keys(sdk).sort(), ['SendspinPlayer', 'loadSendspinClientIdentity']);
+    assert.deepEqual(Object.keys(sdk).sort(), ['SendspinPlayer', 'createSendspinClaimProof', 'loadSendspinClientIdentity']);
     const identity = sdk.loadSendspinClientIdentity();
     const reloaded = (await loadBundle(storage)).loadSendspinClientIdentity();
     assert.equal(identity.clientId, reloaded.clientId);
@@ -83,4 +83,20 @@ test('bundled decoder handles PCM and preserves the callbacks used by Kiosk', as
     assert.deepEqual(Array.from(decoded.samples[0]), [0.5, -0.5]);
     await assert.rejects(player.core.decoder.initOpusEncdecDecoder(
         { codec: 'opus', sample_rate: 48000, channels: 1 }), /requires WebCodecs/);
+});
+
+
+test('SDK ownership proof binds the browser private identity to a fresh server challenge', async () => {
+    const storage = memoryStorage();
+    const sdk = await loadBundle(storage);
+    const identity = sdk.loadSendspinClientIdentity(storage);
+    const server = generateKeyPairSync('x25519');
+    const serverKey = server.publicKey.export({format:'der',type:'spki'}).subarray(-32).toString('base64url');
+    const challenge = {client_id:identity.clientId, server_key:serverKey, message:'web-kiosk-sendspin-claim-v1:test-nonce:wk-test:' + identity.clientId};
+    const proof = sdk.createSendspinClaimProof(storage, challenge);
+    const publicKey = createPublicKey({key:Buffer.concat([Buffer.from('302a300506032b656e032100','hex'),Buffer.from(identity.clientId,'base64url')]),format:'der',type:'spki'});
+    const shared = diffieHellman({privateKey:server.privateKey,publicKey});
+    assert.equal(proof, createHmac('sha256',shared).update(challenge.message).digest('hex'));
+    assert.notEqual(sdk.createSendspinClaimProof(storage,{...challenge,message:challenge.message + ':fresh'}),proof);
+    assert.throws(() => sdk.createSendspinClaimProof(memoryStorage(), challenge), /identity changed/);
 });

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { webcrypto } from 'node:crypto';
+import { webcrypto, generateKeyPairSync, createPublicKey, diffieHellman, createHmac } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createContext, runInContext } from 'node:vm';
@@ -993,4 +993,51 @@ for (const mode of ['0', '1']) test(`custom player name replaces idle ID in HTML
     assert.equal(result.elements.get('kiosk-title').textContent, 'Bedroom');
     message({type:'player', custom_name:null});
     assert.equal(result.elements.get('kiosk-title').textContent, 'wk-test');
+});
+
+
+test('no-audio fallback asks MA for native playback over the kiosk socket', async () => {
+    const result = await startKiosk('?sendspin=1', [], undefined, {}, {fakeSdk:true, playAllowed:()=>true});
+    const message = data => result.socketInstances[0].onmessage({data:JSON.stringify(data)});
+    message({type:'welcome', player_id:'wk-fallback'});
+    await new Promise(resolve => setImmediate(resolve));
+    const player = result.context.__sendspinPlayer;
+    player.core.onStreamStart({}, false);
+    player.config.onStateChange({isPlaying:true,serverState:{metadata:{title:'Track'}}});
+    result.advance(11000);
+    result.intervals.find(timer => timer.delay === 1000).callback();
+    assert.equal(result.socketInstances[0].sent.some(value => value.type === 'sendspin_fallback'), true);
+    message({type:'play',path:'/native-track',title:'Track',duration:180});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(result.audioInstances[0].src.includes('/native-track'),true);
+    assert.equal(result.audioInstances[0].paused,false);
+});
+
+
+test('HTML5 clock and lyrics use media time for a sped-up stream', async () => {
+    const result = await startKiosk('?sendspin=0&lyrics=1&controls=1', [], undefined, {}, {width:1280, playAllowed:()=>true});
+    const message = data => result.socketInstances[0].onmessage({data:JSON.stringify(data)});
+    message({type:'welcome',player_id:'wk-speed'});
+    message({type:'play',path:'/podcast',title:'Podcast',duration:300,start:100,playback_speed:2,wave_seq:1});
+    result.audioInstances[0].currentTime = 40;
+    message({type:'lyrics',seq:1,lines:[{t:0,text:'Opening'},{t:170,text:'Current'}]});
+    result.audioInstances[0].ontimeupdate();
+    result.frames.at(-1)();
+    assert.equal(result.elements.get('kiosk-time').textContent,'3:00');
+    assert.equal(result.elements.get('kiosk-lyrics').children[0].children[1].classList.contains('current'),true);
+});
+
+
+test('kiosk proves its SDK identity before receiving registration welcome', async () => {
+    const result = await startKiosk('');
+    const socket = result.socketInstances[0];
+    const clientId = new URL(result.sockets[0]).searchParams.get('sendspin_client_id');
+    const server = generateKeyPairSync('x25519');
+    const challenge = {type:'sendspin_challenge',client_id:clientId,server_key:server.publicKey.export({format:'der',type:'spki'}).subarray(-32).toString('base64url'),message:'fresh:ws:wk-test:' + clientId};
+    socket.onmessage({data:JSON.stringify(challenge)});
+    await new Promise(resolve => setImmediate(resolve));
+    const publicKey = createPublicKey({key:Buffer.concat([Buffer.from('302a300506032b656e032100','hex'),Buffer.from(clientId,'base64url')]),format:'der',type:'spki'});
+    const shared = diffieHellman({privateKey:server.privateKey,publicKey});
+    assert.equal(socket.sent.find(item => item.type === 'sendspin_proof').proof, createHmac('sha256',shared).update(challenge.message).digest('hex'));
+    assert.equal(result.context.__sendspinPlayer, undefined);
 });

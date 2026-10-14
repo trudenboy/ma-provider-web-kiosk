@@ -198,3 +198,8 @@ uv run ruff check provider/
 uv run mypy provider/
 pre-commit run --all-files
 ```
+
+Sendspin bridge registration verifies the browser identity automatically. A public
+Sendspin client ID alone cannot claim another client's bridge. If the browser's
+Sendspin identity is reset while its explicit `device_id` is retained, use a new
+`device_id` or remove the old player in MA before registering the new identity.

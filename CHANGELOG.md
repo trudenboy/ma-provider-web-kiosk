@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Idle kiosk titles prefer the custom player name configured in MA and update after renaming; the optional Player ID badge retains the technical identifier.
+- Variable-speed HTML5 playback converts stream seconds to media seconds for completion, reconnect seek, duration bounds, clock and lyrics.
+- Sendspin connection and no-audio fallback resume the actual parent or group queue through native HTML5 instead of transferring from a protocol player without a queue.
+- Fallback requests a replacement native stream over the kiosk socket and retains the request across connection recovery.
+
+### Security
+
+- Browser Sendspin bridge claims require a fresh proof of the identity's private key before registration or adoption; knowing a public client ID is insufficient.
+- Browser fallback requires an ownership-verified socket, and an established kiosk cannot be rebound to a different Sendspin identity by an unrelated browser.
 
 ## [1.0.20] - 2026-10-14
 
