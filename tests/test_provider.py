@@ -872,7 +872,7 @@ def _own_queue_controller(mass_mock: Mock, queue_id: str) -> PlayerQueue:
     )
     items: list[QueueItem] = [own.current_item]  # type: ignore[list-item]
 
-    async def add(_queue_id: str, media: object, option: QueueOption) -> None:
+    async def add(_queue_id: str, _media: object, option: QueueOption) -> None:
         assert option == QueueOption.ADD
         items.append(
             QueueItem(queue_id=queue_id, queue_item_id="adopted", name="Song", duration=200)
@@ -880,7 +880,7 @@ def _own_queue_controller(mass_mock: Mock, queue_id: str) -> PlayerQueue:
 
     queues = mass_mock.player_queues
     queues.get = Mock(side_effect=lambda qid: own if qid == queue_id else None)
-    queues.items = Mock(side_effect=lambda qid, *_a, **_k: list(items))
+    queues.items = Mock(side_effect=lambda _qid, *_a, **_k: list(items))
     queues.play_media = AsyncMock(side_effect=add)
     queues.index_by_id = Mock(
         side_effect=lambda _qid, item_id: next(
