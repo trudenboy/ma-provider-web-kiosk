@@ -1087,3 +1087,20 @@ async def test_live_and_snapshot_play_messages_share_one_contract(
     assert {key: live[key] for key in live if key != "wave_seq"} == {
         key: snapshot[key] for key in snapshot if key != "wave_seq"
     }
+
+
+async def test_closed_socket_leaves_no_per_socket_state(provider: WebKioskProvider) -> None:
+    """Every per-socket record, including future ones, is dropped when the socket closes."""
+    server = WebKioskHTTPServer(provider, 0)
+    async with TestClient(TestServer(server.app)) as http:
+        ws = await http.ws_connect("/ws?device_id=gone&lyrics=1&volume_control=1")
+        await ws.receive_json()
+        await ws.close()
+        await asyncio.sleep(0.05)
+    per_socket = {
+        name: value
+        for name, value in vars(server).items()
+        if name.startswith("_ws_") and isinstance(value, (dict, set))
+    }
+    assert per_socket
+    assert {name: value for name, value in per_socket.items() if value} == {}

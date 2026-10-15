@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.30] - 2026-10-15
+
+### Fixed
+
+- When a kiosk following another Sendspin speaker falls back to HTML5 and its own queue is a dynamic mix, the exact song it was playing continues at its position instead of an unrelated song from the mix.
+
+### Security
+
+- Two browsers connecting at the same time with the same device ID and different Sendspin keys can no longer replace the identity the first one proved.
+
 ## [1.0.29] - 2026-10-15
 
 ### Fixed

@@ -11,7 +11,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from music_assistant_models.enums import MediaType, PlaybackState, QueueOption
+from music_assistant_models.enums import MediaType, PlaybackState
 from music_assistant_models.errors import InvalidDataError, PlayerUnavailableError
 from music_assistant_models.media_items import ItemMapping
 from music_assistant_models.player import PlayerMedia
@@ -858,8 +858,8 @@ async def test_unload_cancels_completion_work_in_flight(
     assert len(tasks) == 1
 
 
-def _own_queue_controller(mass_mock: Mock, queue_id: str) -> PlayerQueue:
-    """Give the kiosk an own queue whose ADD appends an item, like the queue controller."""
+def _own_queue_controller(mass_mock: Mock, queue_id: str, *, dynamic: bool = False) -> PlayerQueue:
+    """Give the kiosk an own queue that stages exact items with load(), like the controller."""
     own = PlayerQueue(
         queue_id=queue_id,
         active=False,
@@ -870,18 +870,23 @@ def _own_queue_controller(mass_mock: Mock, queue_id: str) -> PlayerQueue:
         current_index=0,
         current_item=QueueItem(queue_id=queue_id, queue_item_id="old", name="Old", duration=60),
     )
+    own.is_dynamic = dynamic
     items: list[QueueItem] = [own.current_item]  # type: ignore[list-item]
+    queue_data = Mock(userid="previous-user")
 
-    async def add(_queue_id: str, _media: object, option: QueueOption) -> None:
-        assert option == QueueOption.ADD
-        items.append(
-            QueueItem(queue_id=queue_id, queue_item_id="adopted", name="Song", duration=200)
-        )
+    async def load(_queue_id: str, queue_items: list[QueueItem], insert_at_index: int = 0) -> None:
+        items[insert_at_index:insert_at_index] = queue_items
+
+    async def rebuild_pool(*_args: object, **_kwargs: object) -> None:
+        # A dynamic queue turns ADD into a new source and reshuffles its pool.
+        items.insert(1, QueueItem(queue_id=queue_id, queue_item_id="pool", name="Pool", duration=9))
 
     queues = mass_mock.player_queues
+    queues._queue_data = {queue_id: queue_data, **getattr(queues, "_queue_data", {})}
     queues.get = Mock(side_effect=lambda qid: own if qid == queue_id else None)
     queues.items = Mock(side_effect=lambda _qid, *_a, **_k: list(items))
-    queues.play_media = AsyncMock(side_effect=add)
+    queues.load = AsyncMock(side_effect=load)
+    queues.play_media = AsyncMock(side_effect=rebuild_pool)
     queues.index_by_id = Mock(
         side_effect=lambda _qid, item_id: next(
             (i for i, item in enumerate(items) if item.queue_item_id == item_id), None
@@ -898,9 +903,14 @@ def _own_queue_controller(mass_mock: Mock, queue_id: str) -> PlayerQueue:
     return own
 
 
+@pytest.mark.parametrize("dynamic", [False, True])
 @pytest.mark.parametrize("playing", [True, False])
 async def test_sendspin_fallback_of_sync_follower_adopts_the_leader_item(
-    provider: WebKioskProvider, player: WebKioskPlayer, mass_mock: Mock, playing: bool
+    provider: WebKioskProvider,
+    player: WebKioskPlayer,
+    mass_mock: Mock,
+    playing: bool,
+    dynamic: bool,
 ) -> None:
     """A follower parks the leader's item and position on its own queue; the leader is untouched."""
     client_id = "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo"
@@ -924,17 +934,22 @@ async def test_sendspin_fallback_of_sync_follower_adopts_the_leader_item(
     )
     leader_queue.current_item.media_item = track  # type: ignore[union-attr]
     mass_mock.player_queues.get_active_queue = Mock(return_value=leader_queue)
-    own = _own_queue_controller(mass_mock, player.player_id)
+    mass_mock.player_queues._queue_data = {"speaker": Mock(userid="owner-id")}
+    own = _own_queue_controller(mass_mock, player.player_id, dynamic=dynamic)
+    mass_mock.webserver.auth.get_user = AsyncMock(return_value=Mock(user_id="owner-id"))
 
     await provider.fallback_sendspin(player.player_id, expected_client_id=client_id)
 
     leader.set_members.assert_awaited_once_with(player_ids_to_remove=[client_id])
-    mass_mock.player_queues.play_media.assert_awaited_once_with(
-        player.player_id, track, option=QueueOption.ADD
-    )
+    mass_mock.player_queues.play_media.assert_not_awaited()
     assert own.current_item is not None
-    assert own.current_item.queue_item_id == "adopted"
+    assert own.current_item.media_item is track
+    assert own.current_item.name == "Song"
+    assert own.current_item.queue_id == player.player_id
+    assert own.current_item.queue_item_id != "item"
+    assert own.current_item.streamdetails is None
     assert own.current_index == 1
+    assert mass_mock.player_queues._queue_data[player.player_id].userid == "owner-id"
     assert own.resume_pos is not None
     assert 42 <= own.resume_pos <= 43
     if playing:
@@ -1134,16 +1149,10 @@ async def test_follower_fallback_plays_with_the_leader_queue_user(
     )
     _own_queue_controller(mass_mock, player.player_id)
     seen: list[object] = []
-    adopt = mass_mock.player_queues.play_media.side_effect
-
-    async def record_add(*args: Any, **kwargs: Any) -> None:
-        seen.append(get_current_user())
-        await adopt(*args, **kwargs)
-
-    mass_mock.player_queues.play_media.side_effect = record_add
     mass_mock.player_queues.resume.side_effect = lambda *_a: seen.append(get_current_user())
 
     await provider.fallback_sendspin(player.player_id, expected_client_id=client_id)
 
-    assert seen == [owner, owner]
+    assert seen == [owner]
+    assert mass_mock.player_queues._queue_data[player.player_id].userid == "owner-id"
     assert get_current_user() is None

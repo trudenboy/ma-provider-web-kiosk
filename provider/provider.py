@@ -9,11 +9,13 @@ import hmac
 import logging
 import secrets
 import time
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from music_assistant_models.config_entries import ConfigEntry
-from music_assistant_models.enums import ConfigEntryType, MediaType, PlaybackState, QueueOption
+from music_assistant_models.enums import ConfigEntryType, MediaType, PlaybackState
 from music_assistant_models.errors import (
     InvalidDataError,
     MusicAssistantError,
@@ -40,7 +42,7 @@ from .constants import (
 )
 from .http_server import WebKioskHTTPServer
 from .lyrics import parse_track_lyrics
-from .ownership import VerifiedSendspinClaim
+from .ownership import SendspinIdentityConflictError, VerifiedSendspinClaim
 from .player import WebKioskPlayer, playback_lock
 from .sendspin_bridge import WebKioskSendspinBridgeManager
 
@@ -450,6 +452,8 @@ class WebKioskProvider(PlayerProvider):
                     token = current_user.set(owner)
                     try:
                         await self._adopt_queue_item(player_id, item, position)
+                        if (own_data := self._queue_data(player_id)) is not None:
+                            own_data.userid = owner.user_id if owner else None
                         if was_playing:
                             await self.mass.player_queues.resume(player_id)
                     finally:
@@ -685,33 +689,39 @@ class WebKioskProvider(PlayerProvider):
             logger.warning("Native playback fallback failed for %s", player_id, exc_info=True)
 
     async def _adopt_queue_item(self, player_id: str, item: QueueItem, position: float) -> None:
-        """Park another queue's item on this player's own queue at a position, without playing."""
+        """Park an exact copy of another queue's item on this player's queue, without playing."""
         queues = self.mass.player_queues
-        known = {queue_item.queue_item_id for queue_item in queues.items(player_id, limit=100000)}
-        # ADD loads the item for the current user and never starts playback.
-        await queues.play_media(player_id, item.media_item or item.uri, option=QueueOption.ADD)
-        added = [
-            queue_item
-            for queue_item in queues.items(player_id, limit=100000)
-            if queue_item.queue_item_id not in known
-        ]
+        # load() stages exactly these items. play_media() would turn the item into a
+        # source of a dynamic queue and rebuild its pool around it.
+        adopted = replace(
+            item,
+            queue_id=player_id,
+            queue_item_id=uuid4().hex,
+            streamdetails=None,
+            sort_index=0,
+        )
+        end = len(queues.items(player_id, limit=100000))
+        await queues.load(player_id, [adopted], insert_at_index=end)
         own = queues.get(player_id)
-        if not added or own is None:
+        if own is None:
             return
         # Park the queue on the adopted item the way the queue controller parks a
         # transferred queue, so the next play or resume continues at the position.
-        own.current_index = queues.index_by_id(player_id, added[0].queue_item_id)
-        own.current_item = added[0]
+        own.current_index = queues.index_by_id(player_id, adopted.queue_item_id)
+        own.current_item = adopted
         own.resume_pos = int(position)
-        queues.signal_update(player_id)
+        queues.signal_update(player_id, items_changed=True)
+
+    def _queue_data(self, queue_id: str) -> Any:
+        """Return the queue controller's per-queue data, which holds the playback user."""
+        # The playback user exists only in this controller-internal record; the
+        # controller itself restores it from here for background refills. Every
+        # access to it goes through this method.
+        return getattr(self.mass.player_queues, "_queue_data", {}).get(queue_id)
 
     async def _queue_playback_user(self, queue_id: str) -> User | None:
         """Return the user a queue plays for, as the queue controller records it."""
-        # The controller keeps the playback user only in its per-queue data and
-        # restores it the same way for background refills; there is no public
-        # accessor for it.
-        queue_data = getattr(self.mass.player_queues, "_queue_data", {}).get(queue_id)
-        userid = getattr(queue_data, "userid", None)
+        userid = getattr(self._queue_data(queue_id), "userid", None)
         if not isinstance(userid, str) or not userid:
             return None
         return await self.mass.webserver.auth.get_user(userid)
@@ -813,6 +823,10 @@ class WebKioskProvider(PlayerProvider):
         """Transfer identity ownership while the player lifecycle lock is held."""
         if claim is None or claim.player_id != player.player_id or claim.client_id != client_id:
             raise InvalidDataError("Sendspin identity ownership has not been verified")
+        # One device keeps the identity it proved first. Handshakes overlap, so this
+        # is checked here, under the lifecycle lock, not only before the proof.
+        if player.sendspin_client_id and player.sendspin_client_id != client_id:
+            raise SendspinIdentityConflictError(player.player_id)
         player.sendspin_claim = claim
         player.sendspin_fallback = False
         owner = self._sendspin_owners.get(client_id)
@@ -820,12 +834,6 @@ class WebKioskProvider(PlayerProvider):
             owner.sendspin_client_id = None
             if self.bridge_manager:
                 await self.bridge_manager.release_bridge(owner.player_id)
-        previous = player.sendspin_client_id
-        if previous and previous != client_id:
-            player.sendspin_client_id = None
-            if self.bridge_manager:
-                await self.bridge_manager.release_bridge(player.player_id)
-            self._sendspin_owners.pop(previous, None)
         player.sendspin_client_id = client_id
         self._sendspin_owners[client_id] = player
 
