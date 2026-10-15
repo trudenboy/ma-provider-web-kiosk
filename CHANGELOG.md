@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.23] - 2026-10-15
+
+### Fixed
+
+- Disabling a connected kiosk removes it from Music Assistant so it no longer accepts playback; the browser stays connected and the kiosk returns with its identity and volume capability when enabled again.
+- A kiosk saved as disabled is no longer registered when its browser connects, and enabling it registers the already connected browser without a reload.
+- The end of an announcement no longer skips to the next queue item; the kiosk reports idle so Music Assistant can restore the interrupted playback.
+- Playback that does not belong to the active queue's current item no longer advances that queue when it ends.
+- Lyrics and the energy curve follow the queue item actually dispatched to the kiosk instead of the previous track.
+
 ## [1.0.22] - 2026-10-15
 
 ### Fixed
