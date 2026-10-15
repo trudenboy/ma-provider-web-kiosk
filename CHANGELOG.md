@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.27] - 2026-10-15
+
+### Fixed
+
+- A kiosk reconnecting while the next track is loading no longer seeks or pauses that new track using the previous track's position and pause state.
+- A late track-end or playback-failure report from the previous stream can no longer skip or stop a replacement track that started meanwhile.
+- When a kiosk following another Sendspin speaker falls back to HTML5, the current track is restored as the user who started that playback, so tracks from private music sources keep playing and stay attributed to that user.
+
 ## [1.0.26] - 2026-10-15
 
 ### Fixed
