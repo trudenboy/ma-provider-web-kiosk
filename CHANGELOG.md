@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The Kiosk URL Builder rejects a failed MA sign-in with an unauthorized response instead of a server error on Music Assistant versions that report sign-in failures as a typed result.
+- A reloaded idle HTML5 kiosk restores its MA volume, so the next playback no longer starts at full volume.
+- Repeated pause commands no longer advance the reported playback position while paused.
+- HTML5 play messages carry the playback speed, so variable-speed progress, lyrics and seeking stay correct without a reconnect.
+- Falling back from Sendspin to native HTML5 resumes only playback that was running; a paused or stopped queue keeps its state.
+- The browser sends its final position with the track-end report, so a fast stream ending between position reports still advances the queue.
 
 ## [1.0.21] - 2026-10-14
 
