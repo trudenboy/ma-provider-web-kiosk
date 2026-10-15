@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.25] - 2026-10-15
+
+### Fixed
+
+- Reloading a Sendspin kiosk as HTML5 (`sendspin=0`) on the same device switches it back to native playback immediately; the device uses native output while any of its connected tabs runs in HTML5 mode.
+- Falling back from Sendspin to HTML5 while the kiosk follows another Sendspin speaker continues the current track at its position on the kiosk alone, without restarting playback on the remaining speakers.
+- Reloading or removing the provider cancels track-completion and metadata work in flight, so it can no longer reach a replacement kiosk with the same ID.
+
 ## [1.0.24] - 2026-10-15
 
 ### Fixed
