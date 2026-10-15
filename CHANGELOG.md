@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.24] - 2026-10-15
+
+### Fixed
+
+- A kiosk opened in Sendspin mode plays its first ungrouped playback over its linked Sendspin output instead of HTML5; explicit HTML5 kiosks and the HTML5 fallback keep native playback.
+- An HTML5 stream the browser cannot load or continue is reported to Music Assistant and stops playback instead of staying in a playing state; autoplay prompts and replaced streams are not treated as failures.
+- Radio, audiobook and podcast playback no longer requests track lyrics.
+
 ## [1.0.23] - 2026-10-15
 
 ### Fixed

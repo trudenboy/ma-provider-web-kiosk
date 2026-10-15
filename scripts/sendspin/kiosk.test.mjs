@@ -173,6 +173,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
             set volume(value) { if (!options.systemVolume) this._volume = value; }
             addEventListener() {}
             play() {
+                if (options.playError?.()) return Promise.reject(options.playError());
                 if (options.playAllowed?.()) { this.paused = false; return Promise.resolve(); }
                 return Promise.reject(Object.assign(new Error('Gesture required'), { name: 'NotAllowedError' }));
             }
@@ -1040,4 +1041,62 @@ test('kiosk proves its SDK identity before receiving registration welcome', asyn
     const shared = diffieHellman({privateKey:server.privateKey,publicKey});
     assert.equal(socket.sent.find(item => item.type === 'sendspin_proof').proof, createHmac('sha256',shared).update(challenge.message).digest('hex'));
     assert.equal(result.context.__sendspinPlayer, undefined);
+});
+
+
+test('HTML5 load failures report the playback generation once', async () => {
+    let failure = null;
+    const result = await startKiosk('?sendspin=0', [], undefined, {}, {
+        playAllowed: () => true,
+        playError: () => failure,
+    });
+    const socket = result.socketInstances[0];
+    const message = data => socket.onmessage({ data: JSON.stringify(data) });
+    const settle = () => new Promise(resolve => setImmediate(resolve));
+    message({ type: 'welcome', player_id: 'wk-fail' });
+    const audio = result.audioInstances[0];
+    const reports = () => socket.sent.filter(item => item.type === 'playback_error');
+
+    failure = Object.assign(new Error('Unsupported'), { name: 'NotSupportedError' });
+    message({ type: 'play', path: '/broken', duration: 5, playback_generation: 'gen-1' });
+    await settle();
+    assert.equal(reports().length, 1);
+    assert.equal(reports()[0].playback_generation, 'gen-1');
+    audio.error = { code: 4 };
+    audio.onerror();
+    assert.equal(reports().length, 1);
+
+    failure = null;
+    message({ type: 'play', path: '/works', duration: 5, playback_generation: 'gen-2' });
+    await settle();
+    assert.equal(reports().length, 1);
+    audio.error = { code: 2 };
+    audio.onerror();
+    assert.equal(reports().length, 2);
+    assert.equal(reports()[1].playback_generation, 'gen-2');
+});
+
+test('autoplay denial and replaced streams are not reported as playback failures', async () => {
+    let failure = null;
+    const result = await startKiosk('?sendspin=0', [], undefined, {}, {
+        playAllowed: () => true,
+        playError: () => failure,
+    });
+    const socket = result.socketInstances[0];
+    const message = data => socket.onmessage({ data: JSON.stringify(data) });
+    const settle = () => new Promise(resolve => setImmediate(resolve));
+    message({ type: 'welcome', player_id: 'wk-denied' });
+    const audio = result.audioInstances[0];
+
+    failure = Object.assign(new Error('Gesture required'), { name: 'NotAllowedError' });
+    message({ type: 'play', path: '/denied', duration: 5, playback_generation: 'gen-1' });
+    await settle();
+    failure = Object.assign(new Error('Unsupported'), { name: 'NotSupportedError' });
+    message({ type: 'play', path: '/old', duration: 5, playback_generation: 'gen-2' });
+    failure = null;
+    message({ type: 'play', path: '/new', duration: 5, playback_generation: 'gen-3' });
+    await settle();
+    audio.error = { code: 1 };
+    audio.onerror();
+    assert.equal(socket.sent.filter(item => item.type === 'playback_error').length, 0);
 });
