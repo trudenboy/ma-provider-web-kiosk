@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- HTML5 kiosks now receive the next queue item from Music Assistant in advance and switch to it when a track ends, so queue order, the end of the queue and resuming after an announcement follow Music Assistant's own rules.
 - A kiosk that follows another Sendspin speaker now leaves that group when it falls back to HTML5, the same way as ungrouping it in Music Assistant: the other speakers keep playing or stay paused, and the kiosk stays idle with its own queue until playback is started on it.
 
 ### Security

@@ -704,40 +704,12 @@ class WebKioskProvider(PlayerProvider):
                 return
             # One end event per play. play_media clears this when the next item starts.
             player._track_end_handled = True
-            try:
-                queues = self.mass.player_queues
-                queue = queues.get_active_queue(player_id)
-                if queue is None:
-                    await self.mass.players.cmd_stop(player_id)
-                    return
-                media = player.current_media
-                current = queue.current_item
-                if (
-                    media is None
-                    or media.media_type == MediaType.ANNOUNCEMENT
-                    or media.source_id != queue.queue_id
-                    or current is None
-                    or media.queue_item_id != current.queue_item_id
-                ):
-                    # Announcements and other non-queue media end locally. The
-                    # announcement controller restores the interrupted queue.
-                    await player.stop()
-                    return
-                index = queue.current_index
-                nxt = queues.get_next_item(queue.queue_id, index) if index is not None else None
-                next_index = (
-                    queues.index_by_id(queue.queue_id, nxt.queue_item_id)
-                    if nxt is not None
-                    else None
-                )
-                if next_index is None:
-                    await self.mass.players.cmd_stop(player_id)
-                    return
-                await queues.play_index(queue.queue_id, next_index)
-            except MusicAssistantError:
-                logger.exception("Advancing after track end failed for %s", player_id)
-                with contextlib.suppress(MusicAssistantError):
-                    await self.mass.players.cmd_stop(player_id)
+            # Music Assistant hands the next queue item over in advance and follows
+            # the player's current media, so queue progression stays in the core.
+            # Without a handed-over item (end of queue, announcement) the player
+            # reports IDLE and the core's own end-of-queue and restore logic runs.
+            if not await player.start_enqueued_media():
+                await player.stop()
 
     def _compose_kiosk_url(self) -> str:
         """Compose the base kiosk URL from the MA webserver base URL and our port."""
