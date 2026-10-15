@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.28] - 2026-10-15
+
+### Fixed
+
+- Delayed position reports from a previous stream or another tab no longer move the playback clock of the current track.
+- Re-enabling a kiosk that has both a Sendspin tab and an HTML5 tab connected keeps the Sendspin owner's identity instead of registering through the HTML5 tab.
+
 ## [1.0.27] - 2026-10-15
 
 ### Fixed

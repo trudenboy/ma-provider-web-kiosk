@@ -304,7 +304,8 @@ class WebKioskHTTPServer:
         clients = [ws for ws in self._ws_clients.get(player_id, ()) if not ws.closed]
         if not clients:
             return
-        ws = clients[-1]
+        # The Sendspin owner defines the registered identity; any tab will do otherwise.
+        ws = self._owner_socket(player_id) or clients[-1]
         remote_ip, user_agent = self._ws_peers.get(ws, (None, None))
         claim = self._ws_claims.get(ws)
         player = await self.provider.get_or_register_player(
@@ -917,10 +918,9 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
             # A device ID is not a credential. While a socket that proved the
             # Sendspin identity is connected, unverified tabs cannot move its
             # output; once the owner is gone, an HTML5 reload switches to native.
-            owner_connected = any(
-                (claim := self._ws_claims.get(ws)) is not None
-                and claim.client_id == player.sendspin_client_id
-                for ws in clients
+            owner_connected = bool(
+                player.sendspin_client_id
+                and self._owner_socket(player_id, player.sendspin_client_id) is not None
             )
             player.set_html5_requested(
                 not owner_connected and any(ws not in self._ws_claims for ws in clients)
@@ -956,18 +956,14 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
             ):
                 self._ws_volume_support[ws] = supported
                 self._update_volume_support(player_id)
-        elif msg_type == "position":
+        elif msg_type in ("position", "seek"):
             position = msg.get("position")
-            if _is_finite_position(position):
-                player = self.provider.mass.players.get_player(player_id)
-                if player and isinstance(player, WebKioskPlayer):
+            player = self._reporting_player(player_id, msg)
+            if player is not None and _is_finite_position(position):
+                if msg_type == "seek":
+                    player.note_seek(float(position))
+                else:
                     player.update_position(float(position))
-                    self.provider.on_player_activity(player_id)
-        elif msg_type == "seek":
-            position = msg.get("position")
-            player = self.provider.mass.players.get_player(player_id)
-            if player and isinstance(player, WebKioskPlayer) and _is_finite_position(position):
-                player.note_seek(float(position))
                 self.provider.on_player_activity(player_id)
         elif msg_type == "sendspin_fallback":
             claim = self._ws_claims.get(ws) if ws else None
@@ -992,6 +988,26 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
             self.provider.on_player_activity(player_id)
         else:
             logger.debug("Unknown WS message type from %s: %s", player_id, msg_type)
+
+    def _owner_socket(
+        self, player_id: str, client_id: str | None = None
+    ) -> web.WebSocketResponse | None:
+        """Return a connected socket that proved a Sendspin identity, optionally a given one."""
+        for ws in self._ws_clients.get(player_id, ()):
+            claim = self._ws_claims.get(ws)
+            if not ws.closed and claim is not None and client_id in (None, claim.client_id):
+                return ws
+        return None
+
+    def _reporting_player(self, player_id: str, msg: dict[str, Any]) -> WebKioskPlayer | None:
+        """Return the player only when a playback report belongs to its current stream."""
+        # Every report about audio progress names the playback it describes. A
+        # delayed report from a previous stream or another tab is dropped here.
+        generation = msg.get("playback_generation")
+        player = self._get_kiosk_player(player_id)
+        if player is None or not isinstance(generation, str) or not generation:
+            return None
+        return player if generation == player.playback_generation else None
 
     def _reject_invalid_stream_token(
         self, request: web.Request, player_id: str
