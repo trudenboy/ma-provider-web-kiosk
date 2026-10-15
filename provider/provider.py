@@ -666,50 +666,45 @@ class WebKioskProvider(PlayerProvider):
             logger.warning("Native playback fallback failed for %s", player_id, exc_info=True)
 
     async def _stop_failed_playback(self, player_id: str, playback_generation: str) -> None:
-        """Stop the current playback when the browser reports that it failed."""
-        async with playback_lock(self.mass, player_id):
-            player = self.mass.players.get_player(player_id)
-            if (
-                not isinstance(player, WebKioskPlayer)
-                or playback_generation != player.playback_generation
-            ):
-                return
-            if player.playback_state == PlaybackState.IDLE:
-                return
-            try:
-                await self.mass.players.cmd_stop(player_id)
-            except MusicAssistantError:
-                logger.warning("Stopping failed playback on %s failed", player_id, exc_info=True)
+        """End the current playback when the browser reports that it failed."""
+        player = self.mass.players.get_player(player_id)
+        if (
+            not isinstance(player, WebKioskPlayer)
+            or playback_generation != player.playback_generation
+            or player.playback_state == PlaybackState.IDLE
+        ):
+            return
+        # Report IDLE like a finished stream; the queue stays where it is.
+        await player.stop()
 
     async def _advance_after_track(
         self, player_id: str, playback_generation: str, position: float | None = None
     ) -> None:
-        """Play the next queue item, or stop when this track was the last one."""
-        # Validate and dispatch under the playback lock, so a report checked
-        # while a replacement track loads cannot act on that replacement.
-        async with playback_lock(self.mass, player_id):
-            player = self.mass.players.get_player(player_id)
-            if (
-                not isinstance(player, WebKioskPlayer)
-                or player.playback_state != PlaybackState.PLAYING
-            ):
-                return
-            if playback_generation != player.playback_generation:
-                return
-            # Position reports are periodic. The final one arrives with the end
-            # report, so a fast stream ending between reports still completes.
-            if position is not None:
-                player.update_position(position)
-            if player._track_end_handled or not player.playback_reached_end():
-                return
-            # One end event per play. play_media clears this when the next item starts.
-            player._track_end_handled = True
-            # Music Assistant hands the next queue item over in advance and follows
-            # the player's current media, so queue progression stays in the core.
-            # Without a handed-over item (end of queue, announcement) the player
-            # reports IDLE and the core's own end-of-queue and restore logic runs.
-            if not await player.start_enqueued_media():
-                await player.stop()
+        """Start the handed-over queue item, or report IDLE when there is none."""
+        # These reports only change the kiosk's own state and issue no Music
+        # Assistant command, so they take no playback lock: an announcement holds
+        # that lock until this player reports IDLE. The generation check and the
+        # state change below run without an await in between, so a replacement
+        # that starts meanwhile is never mistaken for the finished stream.
+        player = self.mass.players.get_player(player_id)
+        if not isinstance(player, WebKioskPlayer) or player.playback_state != PlaybackState.PLAYING:
+            return
+        if playback_generation != player.playback_generation:
+            return
+        # Position reports are periodic. The final one arrives with the end
+        # report, so a fast stream ending between reports still completes.
+        if position is not None:
+            player.update_position(position)
+        if player._track_end_handled or not player.playback_reached_end():
+            return
+        # One end event per play. play_media clears this when the next item starts.
+        player._track_end_handled = True
+        # Music Assistant hands the next queue item over in advance and follows
+        # the player's current media, so queue progression stays in the core.
+        # Without a handed-over item (end of queue, announcement) the player
+        # reports IDLE and the core's own end-of-queue and restore logic runs.
+        if not await player.start_enqueued_media():
+            await player.stop()
 
     def _compose_kiosk_url(self) -> str:
         """Compose the base kiosk URL from the MA webserver base URL and our port."""

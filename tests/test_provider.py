@@ -740,15 +740,19 @@ async def test_non_track_playback_never_requests_track_lyrics(
 async def test_failed_html5_stream_stops_current_playback(
     provider: WebKioskProvider, mass_mock: Mock, player: WebKioskPlayer
 ) -> None:
-    """A stream the browser cannot load stops playback instead of staying PLAYING."""
+    """A stream the browser cannot load ends playback instead of staying PLAYING."""
     await player.play_media(PlayerMedia(uri="broken", duration=180, source_id="wk_test"))
     mass_mock.players.get_player.return_value = player
 
+    def state() -> PlaybackState:
+        return player.playback_state
+
     await provider._stop_failed_playback("wk_test", "stale-generation")
-    mass_mock.players.cmd_stop.assert_not_awaited()
+    assert state() == PlaybackState.PLAYING
 
     await provider._stop_failed_playback("wk_test", player.playback_generation)
-    mass_mock.players.cmd_stop.assert_awaited_once_with("wk_test")
+    assert state() == PlaybackState.IDLE
+    mass_mock.players.cmd_stop.assert_not_awaited()
 
 
 async def test_unload_cancels_completion_work_in_flight(
@@ -924,64 +928,6 @@ async def test_lyrics_are_looked_up_only_for_kiosks_showing_them(
     provider.http_server.lyrics_requested.assert_called_with("wk_test")
 
 
-async def _replace_track_while_handler_waits(
-    mass_mock: Mock, player: WebKioskPlayer, handler: Coroutine[Any, Any, None]
-) -> None:
-    """Run handler while a replacement track loads under the playback lock."""
-    loading = asyncio.Event()
-    finish = asyncio.Event()
-
-    async def load_replacement() -> None:
-        async with mass_mock.players.get_group_and_player_lock(player.player_id):
-            loading.set()
-            await finish.wait()
-            await player.play_media(
-                PlayerMedia(uri="new", duration=30, source_id="wk_test", queue_item_id="new")
-            )
-
-    loader = asyncio.create_task(load_replacement())
-    await loading.wait()
-    waiting = asyncio.create_task(handler)
-    await asyncio.sleep(0)
-    finish.set()
-    await asyncio.gather(loader, waiting)
-
-
-async def test_old_end_report_waiting_behind_a_track_change_does_not_advance(
-    provider: WebKioskProvider, mass_mock: Mock, player: WebKioskPlayer
-) -> None:
-    """An end report validated before a replacement loads cannot skip the replacement."""
-    _playing_at_end(player)
-    old_generation = player.playback_generation
-    mass_mock.players.get_player.return_value = player
-    await player.enqueue_next_media(
-        PlayerMedia(uri="later", duration=30, source_id="wk_test", queue_item_id="later")
-    )
-
-    await _replace_track_while_handler_waits(
-        mass_mock, player, provider._advance_after_track("wk_test", old_generation)
-    )
-
-    assert player.current_media is not None
-    assert player.current_media.uri == "new"
-    assert player.playback_state == PlaybackState.PLAYING
-
-
-async def test_old_failure_report_waiting_behind_a_track_change_does_not_stop(
-    provider: WebKioskProvider, mass_mock: Mock, player: WebKioskPlayer
-) -> None:
-    """A failure report for the previous stream cannot stop the replacement."""
-    await player.play_media(PlayerMedia(uri="old", duration=30, source_id="wk_test"))
-    old_generation = player.playback_generation
-    mass_mock.players.get_player.return_value = player
-
-    await _replace_track_while_handler_waits(
-        mass_mock, player, provider._stop_failed_playback("wk_test", old_generation)
-    )
-
-    mass_mock.players.cmd_stop.assert_not_awaited()
-
-
 async def test_track_end_starts_the_enqueued_media(
     provider: WebKioskProvider, mass_mock: Mock, player: WebKioskPlayer
 ) -> None:
@@ -1020,3 +966,36 @@ async def test_track_end_without_enqueued_media_goes_idle(
     mass_mock.player_queues.play_index.assert_not_awaited()
     mass_mock.player_queues.get_active_queue.assert_not_called()
     mass_mock.players.cmd_stop.assert_not_awaited()
+
+
+@pytest.mark.parametrize("report", ["ended", "failed"])
+async def test_end_reports_do_not_wait_for_the_playback_lock(
+    provider: WebKioskProvider, mass_mock: Mock, player: WebKioskPlayer, report: str
+) -> None:
+    """An announcement holds the playback lock until the player is IDLE; reports must not wait."""
+    await player.play_media(
+        PlayerMedia(uri="announce", media_type=MediaType.ANNOUNCEMENT, duration=4)
+    )
+    player.note_seek(4)
+    mass_mock.players.get_player.return_value = player
+    held = asyncio.Event()
+    release = asyncio.Event()
+
+    async def announcement_waits_for_idle() -> None:
+        async with mass_mock.players.get_group_and_player_lock(player.player_id):
+            held.set()
+            await release.wait()
+
+    holder = asyncio.create_task(announcement_waits_for_idle())
+    await held.wait()
+    handler = (
+        provider._advance_after_track(player.player_id, player.playback_generation)
+        if report == "ended"
+        else provider._stop_failed_playback(player.player_id, player.playback_generation)
+    )
+    try:
+        await asyncio.wait_for(handler, 1)
+        assert player.playback_state == PlaybackState.IDLE
+    finally:
+        release.set()
+        await holder
