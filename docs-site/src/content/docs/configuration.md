@@ -75,4 +75,3 @@ access to the main MA interface is through Home Assistant authentication.
 
 This setting does not protect `/kiosk` or `/web`. Signing in to the builder does
 not grant the player page access to playback controls: supply its token separately.
-
