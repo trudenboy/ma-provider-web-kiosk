@@ -149,28 +149,17 @@ class WebKioskHTTPServer:
         if not clients:
             logger.debug("broadcast_play: no WebSocket clients for player_id=%s", player_id)
             return
-        play_path = f"/stream/{player_id}?token={self.provider.get_stream_token(player_id)}"
-        payload: dict[str, Any] = {
-            "type": "play",
-            "path": play_path,
-            "player_id": player_id,
-            "playback_generation": playback_generation,
-        }
-        if title:
-            payload["title"] = title
-        if artist:
-            payload["artist"] = artist
-        if image_url:
-            payload["image_url"] = image_url
-        if duration is not None:
-            payload["duration"] = duration
-        # Where audio.currentTime 0 sits in the song. Non-zero after a seek,
-        # because the stream Music Assistant serves then starts at that point.
-        payload["start"] = start
-        payload["playback_speed"] = playback_speed
-        if wave_seq is not None:
-            payload["wave_seq"] = wave_seq
-        msg = json.dumps(payload)
+        msg = self._play_message(
+            player_id,
+            playback_generation=playback_generation,
+            title=title,
+            artist=artist,
+            image_url=image_url,
+            duration=duration,
+            start=start,
+            playback_speed=playback_speed,
+            wave_seq=wave_seq,
+        )
         for ws in list(clients):
             if not ws.closed:
                 self.provider.mass.create_task(self._ws_send(ws, msg, player_id))
@@ -757,27 +746,22 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         if media is None:
             await self._send_volume(player, {ws})
             return
-        play_path = (
-            f"/stream/{player.player_id}?token={self.provider.get_stream_token(player.player_id)}"
-        )
         song_length, stream_start = media_timeline(media)
         wave_seq = self.provider.next_wave_seq(player.player_id)
-        payload: dict[str, Any] = {
-            "type": "play",
-            "path": play_path,
-            "player_id": player.player_id,
-            "playback_generation": player.playback_generation,
-            "title": media.title,
-            "artist": media.artist,
-            "image_url": media.image_url,
-            "duration": song_length,
-            "start": stream_start,
-            "playback_speed": player.playback_speed,
-            "wave_seq": wave_seq,
-        }
+        message = self._play_message(
+            player.player_id,
+            playback_generation=player.playback_generation,
+            title=media.title,
+            artist=media.artist,
+            image_url=media.image_url,
+            duration=song_length,
+            start=stream_start,
+            playback_speed=player.playback_speed,
+            wave_seq=wave_seq,
+        )
         recipients = self._ws_clients.get(player.player_id, {ws}) if refreshed else {ws}
         for client in tuple(recipients):
-            await self._ws_send(client, json.dumps(payload))
+            await self._ws_send(client, message)
         self.provider.spawn_wave(player.player_id, wave_seq)
         self.provider.spawn_lyrics(player.player_id, wave_seq)
         # Position inside the served audio, including while paused. The song
@@ -988,6 +972,40 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
             self.provider.on_player_activity(player_id)
         else:
             logger.debug("Unknown WS message type from %s: %s", player_id, msg_type)
+
+    def _play_message(
+        self,
+        player_id: str,
+        *,
+        playback_generation: str,
+        title: str | None,
+        artist: str | None,
+        image_url: str | None,
+        duration: float | None,
+        start: float,
+        playback_speed: float,
+        wave_seq: int | None,
+    ) -> str:
+        """Build the one play message used for live playback and reconnect snapshots."""
+        payload: dict[str, Any] = {
+            "type": "play",
+            "path": f"/stream/{player_id}?token={self.provider.get_stream_token(player_id)}",
+            "player_id": player_id,
+            "playback_generation": playback_generation,
+            # Where audio.currentTime 0 sits in the song. Non-zero after a seek,
+            # because the stream Music Assistant serves then starts at that point.
+            "start": start,
+            "playback_speed": playback_speed,
+        }
+        optional = {
+            "title": title,
+            "artist": artist,
+            "image_url": image_url,
+            "duration": duration,
+            "wave_seq": wave_seq,
+        }
+        payload.update({key: value for key, value in optional.items() if value is not None})
+        return json.dumps(payload)
 
     def _owner_socket(
         self, player_id: str, client_id: str | None = None

@@ -1046,3 +1046,44 @@ async def test_reattach_prefers_the_verified_sendspin_owner_socket(
     assert kwargs["sendspin_claim"] is claim
     assert kwargs["sendspin_client_id"] == claim.client_id
     assert kwargs["ip_address"] == "10.0.0.2"
+
+
+async def test_live_and_snapshot_play_messages_share_one_contract(
+    provider: WebKioskProvider, mass_mock: Mock, player: WebKioskPlayer
+) -> None:
+    """A reconnect receives the same play fields as live playback, so neither drifts."""
+    server = WebKioskHTTPServer(provider, 0)
+    ws = Mock(closed=False)
+    server._ws_clients[player.player_id] = {ws}
+    sent: list[dict[str, Any]] = []
+    server._ws_send = AsyncMock(  # type: ignore[method-assign]
+        side_effect=lambda _ws, data, *_a: sent.append(json.loads(data))
+    )
+    mass_mock.create_task = Mock(side_effect=lambda coro: coro)
+    provider.spawn_wave = Mock()  # type: ignore[method-assign]
+    provider.spawn_lyrics = Mock()  # type: ignore[method-assign]
+    await player.play_media(
+        PlayerMedia(uri="x", duration=120, title="T", artist="A", image_url="img")
+    )
+
+    server.broadcast_play(
+        player.player_id,
+        playback_generation=player.playback_generation,
+        title="T",
+        artist="A",
+        image_url="img",
+        duration=120,
+        start=0,
+        playback_speed=1.0,
+        wave_seq=1,
+    )
+    await mass_mock.create_task.call_args.args[0]
+    await server._send_snapshot(ws, player)
+
+    plays = [message for message in sent if message["type"] == "play"]
+    assert len(plays) == 2
+    live, snapshot = plays
+    assert set(live) == set(snapshot)
+    assert {key: live[key] for key in live if key != "wave_seq"} == {
+        key: snapshot[key] for key in snapshot if key != "wave_seq"
+    }
