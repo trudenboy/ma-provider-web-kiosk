@@ -9,10 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Opening an HTML5 kiosk tab on a device that is playing through Sendspin moves playback to native output so the new tab plays audio; paused playback stays paused.
+- Reloading a Sendspin kiosk as HTML5 while it plays moves playback to native output so the reloaded tab plays audio; paused playback stays paused.
 - A stop or pause issued while playback moves from Sendspin to HTML5 is no longer undone by the handover.
 - Reloading or removing the provider also cancels a browser-requested Sendspin-to-HTML5 handover in progress.
 - Lyrics are looked up only while at least one connected kiosk shows them, avoiding metadata refreshes and external lookups for the default screen.
+
+### Security
+
+- A browser that only knows a device ID can no longer move a kiosk off its Sendspin output while the browser that proved that Sendspin identity is connected.
 
 ## [1.0.25] - 2026-10-15
 

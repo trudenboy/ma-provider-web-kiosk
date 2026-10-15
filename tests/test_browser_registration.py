@@ -910,7 +910,7 @@ async def test_same_device_reload_into_html5_restores_native_output(
 
 
 @pytest.mark.parametrize("paused", [False, True])
-async def test_html5_tab_joining_sendspin_playback_moves_it_to_native(  # noqa: PLR0915
+async def test_html5_reload_during_sendspin_playback_moves_it_to_native(  # noqa: PLR0915
     provider: WebKioskProvider,
     mass_mock: Mock,
     browser_registry: tuple[
@@ -918,7 +918,7 @@ async def test_html5_tab_joining_sendspin_playback_moves_it_to_native(  # noqa: 
     ],
     paused: bool,
 ) -> None:
-    """An HTML5 tab joining active Sendspin playback receives audio; a pause is kept."""
+    """Reloading the owner tab as HTML5 during Sendspin playback keeps audio; a pause is kept."""
     registry, sendspin, _universal, client, tasks = browser_registry
     native = SendspinPlayer(sendspin, CLIENT_ID, initial_hello=client.info)
     await registry.register(native)
@@ -951,6 +951,10 @@ async def test_html5_tab_joining_sendspin_playback_moves_it_to_native(  # noqa: 
             await kiosk.play_media(PlayerMedia(uri="native", duration=180, source_id=queue_id))
 
         queues.resume = AsyncMock(side_effect=resume)  # type: ignore[method-assign]
+        # The owner tab reloads as HTML5 inside the disconnect grace period.
+        await first.close()
+        first = None
+        await asyncio.sleep(0.05)
         second = await http.ws_connect("/ws?device_id=join&sendspin=0")
         await second.receive_json()
         played = None
@@ -972,6 +976,48 @@ async def test_html5_tab_joining_sendspin_playback_moves_it_to_native(  # noqa: 
             if socket is not None:
                 await socket.close()
         await http.close()
+        provider.cancel_all_player_closes()
+        await provider.bridge_manager.close()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await native.on_unload()
+
+
+async def test_unverified_tab_cannot_take_output_from_connected_sendspin_owner(
+    provider: WebKioskProvider,
+    browser_registry: tuple[
+        PlayerController, SendspinProvider, UniversalPlayerProvider, Mock, list[asyncio.Task[Any]]
+    ],
+) -> None:
+    """Knowing a device ID does not let another browser detach the owner's Sendspin output."""
+    registry, sendspin, _universal, client, tasks = browser_registry
+    native = SendspinPlayer(sendspin, CLIENT_ID, initial_hello=client.info)
+    await registry.register(native)
+    provider.sendspin_bridge_enabled = True
+    provider.bridge_manager = WebKioskSendspinBridgeManager(provider)
+    server = WebKioskHTTPServer(provider, 0)
+    provider.http_server = server
+    try:
+        async with TestClient(TestServer(server.app)) as http:
+            owner = await connect_owned_ws(
+                http, "/ws?device_id=owned&sendspin_client_id=" + CLIENT_ID
+            )
+            await owner.receive_json()
+            kiosk = registry.get_player("wk_owned")
+            assert isinstance(kiosk, WebKioskPlayer)
+            native.group_event_cb(client.group, GroupStateChangedEvent(PlaybackStateType.PLAYING))
+            kiosk.refresh_state()
+            assert kiosk.active_output_protocol == CLIENT_ID
+
+            intruder = await http.ws_connect("/ws?device_id=owned")
+            await intruder.receive_json()
+            await asyncio.sleep(0.05)
+            assert not kiosk.sendspin_fallback
+            assert kiosk.active_output_protocol == CLIENT_ID
+            assert registry.get_player(CLIENT_ID) is native
+            assert registry._select_best_output_protocol(kiosk)[0] is native
+            await intruder.close()
+            await owner.close()
+    finally:
         provider.cancel_all_player_closes()
         await provider.bridge_manager.close()
         await asyncio.gather(*tasks, return_exceptions=True)

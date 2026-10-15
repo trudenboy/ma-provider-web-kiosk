@@ -911,12 +911,20 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
                 self._update_volume_support(player_id)
 
     def _update_output_mode(self, player_id: str) -> None:
-        """Use native output while any connected tab of the device asked for HTML5."""
+        """Use native output for an HTML5 tab unless the verified Sendspin owner is connected."""
         clients = self._ws_clients.get(player_id, set())
         if clients and (player := self._get_kiosk_player(player_id)):
-            # A Sendspin tab can also play native streams; an HTML5 tab cannot
-            # play Sendspin, so one HTML5 tab moves the device to native output.
-            player.set_html5_requested(any(ws not in self._ws_claims for ws in clients))
+            # A device ID is not a credential. While a socket that proved the
+            # Sendspin identity is connected, unverified tabs cannot move its
+            # output; once the owner is gone, an HTML5 reload switches to native.
+            owner_connected = any(
+                (claim := self._ws_claims.get(ws)) is not None
+                and claim.client_id == player.sendspin_client_id
+                for ws in clients
+            )
+            player.set_html5_requested(
+                not owner_connected and any(ws not in self._ws_claims for ws in clients)
+            )
 
     def _update_volume_support(self, player_id: str) -> None:
         """Require all connected outputs to support the shared volume command."""
