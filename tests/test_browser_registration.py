@@ -421,7 +421,9 @@ async def test_sendspin_track_updates_deliver_ma_lyrics(  # noqa: PLR0915
     server = WebKioskHTTPServer(provider, 0)
     provider.http_server = server
     async with TestClient(TestServer(server.app)) as http:
-        ws = await connect_owned_ws(http, "/ws?device_id=lyrics&sendspin_client_id=" + CLIENT_ID)
+        ws = await connect_owned_ws(
+            http, "/ws?device_id=lyrics&lyrics=1&sendspin_client_id=" + CLIENT_ID
+        )
         await ws.receive_json()
         kiosk = registry.get_player("wk_lyrics")
         assert kiosk is not None
@@ -455,7 +457,9 @@ async def test_sendspin_track_updates_deliver_ma_lyrics(  # noqa: PLR0915
                     break
         assert updated["lines"] == [{"t": 0.0, "text": "Next song lyrics"}]
         await ws.close()
-        ws = await connect_owned_ws(http, "/ws?device_id=lyrics&sendspin_client_id=" + CLIENT_ID)
+        ws = await connect_owned_ws(
+            http, "/ws?device_id=lyrics&lyrics=1&sendspin_client_id=" + CLIENT_ID
+        )
         await ws.receive_json()
         async with asyncio.timeout(1):
             while True:
@@ -899,6 +903,75 @@ async def test_same_device_reload_into_html5_restores_native_output(
             assert protocol is None
             await second.close()
     finally:
+        provider.cancel_all_player_closes()
+        await provider.bridge_manager.close()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await native.on_unload()
+
+
+@pytest.mark.parametrize("paused", [False, True])
+async def test_html5_tab_joining_sendspin_playback_moves_it_to_native(  # noqa: PLR0915
+    provider: WebKioskProvider,
+    mass_mock: Mock,
+    browser_registry: tuple[
+        PlayerController, SendspinProvider, UniversalPlayerProvider, Mock, list[asyncio.Task[Any]]
+    ],
+    paused: bool,
+) -> None:
+    """An HTML5 tab joining active Sendspin playback receives audio; a pause is kept."""
+    registry, sendspin, _universal, client, tasks = browser_registry
+    native = SendspinPlayer(sendspin, CLIENT_ID, initial_hello=client.info)
+    await registry.register(native)
+    provider.sendspin_bridge_enabled = True
+    provider.bridge_manager = WebKioskSendspinBridgeManager(provider)
+    server = WebKioskHTTPServer(provider, 0)
+    provider.http_server = server
+    http = TestClient(TestServer(server.app))
+    await http.start_server()
+    first = second = None
+    try:
+        first = await connect_owned_ws(http, "/ws?device_id=join&sendspin_client_id=" + CLIENT_ID)
+        await first.receive_json()
+        kiosk = registry.get_player("wk_join")
+        assert isinstance(kiosk, WebKioskPlayer)
+        queues = PlayerQueuesController(mass_mock)
+        mass_mock.player_queues = queues
+        await queues.on_player_register(kiosk)
+        queue = queues.get(kiosk.player_id)
+        assert queue is not None
+        queue.active = True
+        queue.state = PlaybackState.PAUSED if paused else PlaybackState.PLAYING
+        state = PlaybackStateType.PAUSED if paused else PlaybackStateType.PLAYING
+        native.group_event_cb(client.group, GroupStateChangedEvent(state))
+        kiosk.refresh_state()
+        assert kiosk.active_output_protocol == CLIENT_ID
+
+        async def resume(queue_id: str) -> None:
+            assert kiosk.active_output_protocol == "native"
+            await kiosk.play_media(PlayerMedia(uri="native", duration=180, source_id=queue_id))
+
+        queues.resume = AsyncMock(side_effect=resume)  # type: ignore[method-assign]
+        second = await http.ws_connect("/ws?device_id=join&sendspin=0")
+        await second.receive_json()
+        played = None
+        with suppress(TimeoutError):
+            async with asyncio.timeout(0.5):
+                while played is None:
+                    message = await second.receive_json()
+                    if message.get("type") == "play":
+                        played = message
+        assert kiosk.active_output_protocol == "native"
+        if paused:
+            queues.resume.assert_not_awaited()
+            assert played is None
+        else:
+            queues.resume.assert_awaited_once_with(kiosk.player_id)
+            assert played is not None
+    finally:
+        for socket in (first, second):
+            if socket is not None:
+                await socket.close()
+        await http.close()
         provider.cancel_all_player_closes()
         await provider.bridge_manager.close()
         await asyncio.gather(*tasks, return_exceptions=True)
