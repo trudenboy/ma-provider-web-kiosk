@@ -9,10 +9,8 @@ import hmac
 import logging
 import secrets
 import time
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
-from uuid import uuid4
 
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType, MediaType, PlaybackState
@@ -23,7 +21,6 @@ from music_assistant_models.errors import (
 )
 
 from music_assistant.constants import ATTR_ENABLED
-from music_assistant.controllers.webserver.helpers.auth_middleware import current_user
 from music_assistant.models.player_provider import PlayerProvider
 
 from .constants import (
@@ -47,7 +44,6 @@ from .player import WebKioskPlayer, playback_lock
 from .sendspin_bridge import WebKioskSendspinBridgeManager
 
 if TYPE_CHECKING:
-    from music_assistant_models.auth import User
     from music_assistant_models.player import PlayerMedia
     from music_assistant_models.queue_item import QueueItem
 
@@ -411,17 +407,11 @@ class WebKioskProvider(PlayerProvider):
                 # A startup failure also requests fallback. Only playback that was
                 # running moves to HTML5; a paused or stopped queue keeps its state.
                 was_playing = queue.state == PlaybackState.PLAYING
-                # A sync follower's active queue belongs to its leader. Capture what
-                # it played so the kiosk restores it alone; the leader keeps playing.
+                # A sync follower's active queue belongs to its leader. Leaving the
+                # group ends the kiosk's part in it, as an ungroup does in Music
+                # Assistant: the leader keeps playing and nothing is carried over.
                 protocol = self.mass.players.get_player(client_id)
                 follower = bool(protocol and protocol.synced_to and protocol.synced_to != client_id)
-                item = queue.current_item
-                position = (
-                    queue.corrected_elapsed_time
-                    if was_playing
-                    else queue.resume_pos or queue.elapsed_time or 0
-                )
-                owner = await self._queue_playback_user(queue.queue_id) if follower else None
                 claim = player.sendspin_claim
                 player.sendspin_fallback = True
                 try:
@@ -441,23 +431,10 @@ class WebKioskProvider(PlayerProvider):
                     raise
             # Stream preparation can take time. Release the registration lock while
             # resuming, and do not clear a newer connection's state on failure.
-            if player.sendspin_claim is not claim or not (was_playing or follower):
+            if player.sendspin_claim is not claim or not was_playing or follower:
                 return
             try:
-                if not follower:
-                    await self.mass.player_queues.resume(queue.queue_id)
-                elif item is not None:
-                    # The kiosk socket is unauthenticated. Adopt and resume the
-                    # item as the leader queue's user so source access holds.
-                    token = current_user.set(owner)
-                    try:
-                        await self._adopt_queue_item(player_id, item, position)
-                        if (own_data := self._queue_data(player_id)) is not None:
-                            own_data.userid = owner.user_id if owner else None
-                        if was_playing:
-                            await self.mass.player_queues.resume(player_id)
-                    finally:
-                        current_user.reset(token)
+                await self.mass.player_queues.resume(queue.queue_id)
             except BaseException:
                 if player.sendspin_claim is claim:
                     player.sendspin_fallback = False
@@ -687,44 +664,6 @@ class WebKioskProvider(PlayerProvider):
             await self.fallback_sendspin(player_id, expected_client_id=client_id)
         except MusicAssistantError, TimeoutError:
             logger.warning("Native playback fallback failed for %s", player_id, exc_info=True)
-
-    async def _adopt_queue_item(self, player_id: str, item: QueueItem, position: float) -> None:
-        """Park an exact copy of another queue's item on this player's queue, without playing."""
-        queues = self.mass.player_queues
-        # load() stages exactly these items. play_media() would turn the item into a
-        # source of a dynamic queue and rebuild its pool around it.
-        adopted = replace(
-            item,
-            queue_id=player_id,
-            queue_item_id=uuid4().hex,
-            streamdetails=None,
-            sort_index=0,
-        )
-        end = len(queues.items(player_id, limit=100000))
-        await queues.load(player_id, [adopted], insert_at_index=end)
-        own = queues.get(player_id)
-        if own is None:
-            return
-        # Park the queue on the adopted item the way the queue controller parks a
-        # transferred queue, so the next play or resume continues at the position.
-        own.current_index = queues.index_by_id(player_id, adopted.queue_item_id)
-        own.current_item = adopted
-        own.resume_pos = int(position)
-        queues.signal_update(player_id, items_changed=True)
-
-    def _queue_data(self, queue_id: str) -> Any:
-        """Return the queue controller's per-queue data, which holds the playback user."""
-        # The playback user exists only in this controller-internal record; the
-        # controller itself restores it from here for background refills. Every
-        # access to it goes through this method.
-        return getattr(self.mass.player_queues, "_queue_data", {}).get(queue_id)
-
-    async def _queue_playback_user(self, queue_id: str) -> User | None:
-        """Return the user a queue plays for, as the queue controller records it."""
-        userid = getattr(self._queue_data(queue_id), "userid", None)
-        if not isinstance(userid, str) or not userid:
-            return None
-        return await self.mass.webserver.auth.get_user(userid)
 
     async def _stop_failed_playback(self, player_id: str, playback_generation: str) -> None:
         """Stop the current playback when the browser reports that it failed."""

@@ -20,7 +20,6 @@ from music_assistant_models.queue_item import QueueItem
 
 import music_assistant.providers.web_kiosk.provider as provider_module
 from music_assistant.controllers.streams import StreamsController
-from music_assistant.controllers.webserver.helpers.auth_middleware import get_current_user
 from music_assistant.providers.web_kiosk.http_server import WebKioskHTTPServer
 from music_assistant.providers.web_kiosk.ownership import VerifiedSendspinClaim
 from music_assistant.providers.web_kiosk.player import WebKioskPlayer
@@ -858,61 +857,11 @@ async def test_unload_cancels_completion_work_in_flight(
     assert len(tasks) == 1
 
 
-def _own_queue_controller(mass_mock: Mock, queue_id: str, *, dynamic: bool = False) -> PlayerQueue:
-    """Give the kiosk an own queue that stages exact items with load(), like the controller."""
-    own = PlayerQueue(
-        queue_id=queue_id,
-        active=False,
-        display_name="Test Kiosk",
-        available=True,
-        items=1,
-        state=PlaybackState.IDLE,
-        current_index=0,
-        current_item=QueueItem(queue_id=queue_id, queue_item_id="old", name="Old", duration=60),
-    )
-    own.is_dynamic = dynamic
-    items: list[QueueItem] = [own.current_item]  # type: ignore[list-item]
-    queue_data = Mock(userid="previous-user")
-
-    async def load(_queue_id: str, queue_items: list[QueueItem], insert_at_index: int = 0) -> None:
-        items[insert_at_index:insert_at_index] = queue_items
-
-    async def rebuild_pool(*_args: object, **_kwargs: object) -> None:
-        # A dynamic queue turns ADD into a new source and reshuffles its pool.
-        items.insert(1, QueueItem(queue_id=queue_id, queue_item_id="pool", name="Pool", duration=9))
-
-    queues = mass_mock.player_queues
-    queues._queue_data = {queue_id: queue_data, **getattr(queues, "_queue_data", {})}
-    queues.get = Mock(side_effect=lambda qid: own if qid == queue_id else None)
-    queues.items = Mock(side_effect=lambda _qid, *_a, **_k: list(items))
-    queues.load = AsyncMock(side_effect=load)
-    queues.play_media = AsyncMock(side_effect=rebuild_pool)
-    queues.index_by_id = Mock(
-        side_effect=lambda _qid, item_id: next(
-            (i for i, item in enumerate(items) if item.queue_item_id == item_id), None
-        )
-    )
-    queues.get_item = Mock(
-        side_effect=lambda _qid, item_id: next(
-            (item for item in items if item.queue_item_id == item_id), None
-        )
-    )
-    queues.signal_update = Mock()
-    queues.resume = AsyncMock()
-    queues.seek = AsyncMock()
-    return own
-
-
-@pytest.mark.parametrize("dynamic", [False, True])
 @pytest.mark.parametrize("playing", [True, False])
-async def test_sendspin_fallback_of_sync_follower_adopts_the_leader_item(
-    provider: WebKioskProvider,
-    player: WebKioskPlayer,
-    mass_mock: Mock,
-    playing: bool,
-    dynamic: bool,
+async def test_sendspin_fallback_of_sync_follower_leaves_the_group_like_ungroup(
+    provider: WebKioskProvider, player: WebKioskPlayer, mass_mock: Mock, playing: bool
 ) -> None:
-    """A follower parks the leader's item and position on its own queue; the leader is untouched."""
+    """A follower leaves the group as an ungroup does: the leader plays on, nothing moves."""
     client_id = "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo"
     player.sendspin_client_id = client_id
     player.sendspin_claim = VerifiedSendspinClaim(player.player_id, client_id)
@@ -920,7 +869,6 @@ async def test_sendspin_fallback_of_sync_follower_adopts_the_leader_item(
     protocol = Mock(player_id=client_id, synced_to="speaker", group_members=[])
     players = {player.player_id: player, client_id: protocol, "speaker": leader}
     mass_mock.players.get_player = Mock(side_effect=lambda pid, **_: players.get(pid))
-    track = Mock(name="track-media")
     leader_queue = PlayerQueue(
         queue_id="speaker",
         active=True,
@@ -929,34 +877,21 @@ async def test_sendspin_fallback_of_sync_follower_adopts_the_leader_item(
         items=3,
         state=PlaybackState.PLAYING if playing else PlaybackState.PAUSED,
         current_item=QueueItem(queue_id="speaker", queue_item_id="item", name="Song", duration=200),
-        elapsed_time=42,
-        elapsed_time_last_updated=time.time(),
     )
-    leader_queue.current_item.media_item = track  # type: ignore[union-attr]
     mass_mock.player_queues.get_active_queue = Mock(return_value=leader_queue)
-    mass_mock.player_queues._queue_data = {"speaker": Mock(userid="owner-id")}
-    own = _own_queue_controller(mass_mock, player.player_id, dynamic=dynamic)
-    mass_mock.webserver.auth.get_user = AsyncMock(return_value=Mock(user_id="owner-id"))
+    mass_mock.player_queues.resume = AsyncMock()
+    mass_mock.player_queues.play_media = AsyncMock()
+    mass_mock.player_queues.load = AsyncMock()
 
     await provider.fallback_sendspin(player.player_id, expected_client_id=client_id)
 
     leader.set_members.assert_awaited_once_with(player_ids_to_remove=[client_id])
+    mass_mock.players.unregister.assert_awaited_once_with(client_id)
+    assert player.active_output_protocol == "native"
+    mass_mock.player_queues.resume.assert_not_awaited()
     mass_mock.player_queues.play_media.assert_not_awaited()
-    assert own.current_item is not None
-    assert own.current_item.media_item is track
-    assert own.current_item.name == "Song"
-    assert own.current_item.queue_id == player.player_id
-    assert own.current_item.queue_item_id != "item"
-    assert own.current_item.streamdetails is None
-    assert own.current_index == 1
-    assert mass_mock.player_queues._queue_data[player.player_id].userid == "owner-id"
-    assert own.resume_pos is not None
-    assert 42 <= own.resume_pos <= 43
-    if playing:
-        mass_mock.player_queues.resume.assert_awaited_once_with(player.player_id)
-    else:
-        mass_mock.player_queues.resume.assert_not_awaited()
-    assert all(call.args[0] != "speaker" for call in mass_mock.player_queues.resume.await_args_list)
+    mass_mock.player_queues.load.assert_not_awaited()
+    assert leader_queue.state == (PlaybackState.PLAYING if playing else PlaybackState.PAUSED)
 
 
 async def test_unload_cancels_browser_fallback_in_flight(
@@ -1117,42 +1052,3 @@ async def test_old_failure_report_waiting_behind_a_track_change_does_not_stop(
     )
 
     mass_mock.players.cmd_stop.assert_not_awaited()
-
-
-async def test_follower_fallback_plays_with_the_leader_queue_user(
-    provider: WebKioskProvider, player: WebKioskPlayer, mass_mock: Mock
-) -> None:
-    """The restored item loads as the leader queue's user, then the context is restored."""
-    client_id = "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo"
-    player.sendspin_client_id = client_id
-    player.sendspin_claim = VerifiedSendspinClaim(player.player_id, client_id)
-    leader = Mock(player_id="speaker", set_members=AsyncMock())
-    protocol = Mock(player_id=client_id, synced_to="speaker", group_members=[])
-    players = {player.player_id: player, client_id: protocol, "speaker": leader}
-    mass_mock.players.get_player = Mock(side_effect=lambda pid, **_: players.get(pid))
-    leader_queue = PlayerQueue(
-        queue_id="speaker",
-        active=True,
-        display_name="Speaker",
-        available=True,
-        items=1,
-        state=PlaybackState.PLAYING,
-        current_item=QueueItem(
-            queue_id="speaker", queue_item_id="item", name="Private song", duration=200
-        ),
-    )
-    mass_mock.player_queues.get_active_queue = Mock(return_value=leader_queue)
-    mass_mock.player_queues._queue_data = {"speaker": Mock(userid="owner-id")}
-    owner = Mock(user_id="owner-id")
-    mass_mock.webserver.auth.get_user = AsyncMock(
-        side_effect=lambda uid: owner if uid == "owner-id" else None
-    )
-    _own_queue_controller(mass_mock, player.player_id)
-    seen: list[object] = []
-    mass_mock.player_queues.resume.side_effect = lambda *_a: seen.append(get_current_user())
-
-    await provider.fallback_sendspin(player.player_id, expected_client_id=client_id)
-
-    assert seen == [owner]
-    assert mass_mock.player_queues._queue_data[player.player_id].userid == "owner-id"
-    assert get_current_user() is None

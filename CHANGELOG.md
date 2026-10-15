@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.30] - 2026-10-15
 
-### Fixed
+### Changed
 
-- When a kiosk following another Sendspin speaker falls back to HTML5 and its own queue is a dynamic mix, the exact song it was playing continues at its position instead of an unrelated song from the mix.
+- A kiosk that follows another Sendspin speaker now leaves that group when it falls back to HTML5, the same way as ungrouping it in Music Assistant: the other speakers keep playing or stay paused, and the kiosk stays idle with its own queue until playback is started on it.
 
 ### Security
 
