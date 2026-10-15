@@ -883,7 +883,9 @@ async def test_play_broadcast_carries_playback_speed(
     server.broadcast_play("wk_test", playback_generation="gen", playback_speed=2.0)
     await mass_mock.create_task.call_args.args[0]
 
-    payload = json.loads(server._ws_send.await_args.args[1])
+    sent = server._ws_send.await_args
+    assert sent is not None
+    payload = json.loads(sent.args[1])
     assert payload["type"] == "play"
     assert payload["playback_speed"] == 2.0
 
