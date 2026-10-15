@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.26] - 2026-10-15
+
+### Fixed
+
+- Reloading a Sendspin kiosk as HTML5 while it plays moves playback to native output so the reloaded tab plays audio; paused playback stays paused.
+- A stop or pause issued while playback moves from Sendspin to HTML5 is no longer undone by the handover.
+- Reloading or removing the provider also cancels a browser-requested Sendspin-to-HTML5 handover in progress.
+- Lyrics are looked up only while at least one connected kiosk shows them, avoiding metadata refreshes and external lookups for the default screen.
+
+### Security
+
+- A browser that only knows a device ID can no longer move a kiosk off its Sendspin output while the browser that proved that Sendspin identity is connected.
+
 ## [1.0.25] - 2026-10-15
 
 ### Fixed

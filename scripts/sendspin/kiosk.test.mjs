@@ -1100,3 +1100,10 @@ test('autoplay denial and replaced streams are not reported as playback failures
     audio.onerror();
     assert.equal(socket.sent.filter(item => item.type === 'playback_error').length, 0);
 });
+
+test('kiosk socket asks for lyrics only when the lyrics addition is enabled', async () => {
+    const plain = await startKiosk('?sendspin=0');
+    assert.ok(!plain.sockets[0].includes('lyrics=1'));
+    const withLyrics = await startKiosk('?sendspin=0&lyrics=1');
+    assert.ok(withLyrics.sockets[0].includes('&lyrics=1'));
+});
