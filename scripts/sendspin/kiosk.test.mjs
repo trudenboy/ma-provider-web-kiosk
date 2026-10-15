@@ -1107,3 +1107,16 @@ test('kiosk socket asks for lyrics only when the lyrics addition is enabled', as
     const withLyrics = await startKiosk('?sendspin=0&lyrics=1');
     assert.ok(withLyrics.sockets[0].includes('&lyrics=1'));
 });
+
+test('position heartbeats name the playback generation they describe', async () => {
+    const result = await startKiosk('?sendspin=0', [], undefined, {}, { playAllowed: () => true });
+    const socket = result.socketInstances[0];
+    const message = data => socket.onmessage({ data: JSON.stringify(data) });
+    message({ type: 'welcome', player_id: 'wk-pos' });
+    message({ type: 'play', path: '/track', duration: 60, playback_generation: 'gen-7' });
+    result.audioInstances[0].currentTime = 12;
+    result.intervals.find(interval => interval.delay === 5000).callback();
+    const report = socket.sent.filter(item => item.type === 'position').at(-1);
+    assert.equal(report.position, 12);
+    assert.equal(report.playback_generation, 'gen-7');
+});
