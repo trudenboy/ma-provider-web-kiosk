@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.30] - 2026-10-15
+
+### Changed
+
+- HTML5 kiosks now receive the next queue item from Music Assistant in advance and switch to it when a track ends, so queue order, the end of the queue and resuming after an announcement follow Music Assistant's own rules.
+- A kiosk that follows another Sendspin speaker now leaves that group when it falls back to HTML5, the same way as ungrouping it in Music Assistant: the other speakers keep playing or stay paused, and the kiosk stays idle with its own queue until playback is started on it.
+
+### Fixed
+
+- Announcements on an HTML5 kiosk end as soon as the announcement finishes instead of after Music Assistant's ten-second safety timeout, and a stream failure during an announcement no longer waits for it.
+
+### Security
+
+- Two browsers connecting at the same time with the same device ID and different Sendspin keys can no longer replace the identity the first one proved.
+
 ## [1.0.29] - 2026-10-15
 
 ### Fixed
