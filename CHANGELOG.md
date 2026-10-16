@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.37] - 2026-10-16
+
+### Changed
+
+- Messages still waiting to be sent to a kiosk page are dropped when that page disconnects, instead of being sent after it is gone.
+
+### Fixed
+
+- Closing a kiosk page while it is being brought up to date no longer interrupts the playback work it started: a paused kiosk stays paused, a move from Sendspin to HTML5 still resumes the queue, and the other open pages still receive the rebuilt stream.
+
 ## [1.0.36] - 2026-10-16
 
 ### Fixed
