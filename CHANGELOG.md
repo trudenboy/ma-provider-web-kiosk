@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.38] - 2026-10-16
+
+### Fixed
+
+- An HTML5 kiosk no longer stops with tracks still queued when the next track is removed from the queue just before the current one ends, or when a track ends before Music Assistant has handed over the next one: the kiosk continues with the track that now follows.
+
 ## [1.0.37] - 2026-10-16
 
 ### Changed
