@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.35] - 2026-10-16
+
+### Changed
+
+- A connecting kiosk page is brought up to date while its own messages are already handled, so waiting for a playback command can no longer hold up the page's reports.
+
+### Fixed
+
+- Deleting the last upcoming track after it was handed to a kiosk no longer plays it; the kiosk ends playback after the current track.
+- A kiosk page reloaded during an announcement receives the announcement right away instead of waiting until Music Assistant's announcement timeout.
+
 ## [1.0.34] - 2026-10-16
 
 ### Changed
