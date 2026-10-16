@@ -608,6 +608,59 @@ async def test_sendspin_fallback_resumes_only_playing_queue(
     assert queue.state == queue_state
 
 
+@pytest.mark.parametrize(
+    ("position", "media_type", "duration", "play_at"),
+    [
+        (35.0, MediaType.TRACK, 25, 23),
+        (24.0, MediaType.TRACK, 25, 23),
+        (10.0, MediaType.TRACK, 25, None),
+        (35.0, MediaType.RADIO, 25, None),
+        (35.0, MediaType.TRACK, None, None),
+    ],
+)
+async def test_sendspin_fallback_resumes_inside_the_track(
+    provider: WebKioskProvider,
+    player: WebKioskPlayer,
+    mass_mock: Mock,
+    position: float,
+    media_type: MediaType,
+    duration: int | None,
+    play_at: int | None,
+) -> None:
+    """A queue position past the end of the track starts its last seconds instead."""
+    client_id = "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo"
+    player.sendspin_client_id = client_id
+    player.sendspin_claim = VerifiedSendspinClaim(player.player_id, client_id)
+    mass_mock.players.get_player = Mock(
+        side_effect=lambda player_id, **_: player if player_id == player.player_id else None
+    )
+    queue = PlayerQueue(
+        queue_id=player.player_id,
+        active=True,
+        display_name="Test Kiosk",
+        available=True,
+        items=2,
+        state=PlaybackState.PLAYING,
+        elapsed_time=position,
+        elapsed_time_last_updated=time.time(),
+        current_item=Mock(queue_item_id="item-1", duration=duration, media_type=media_type),
+    )
+    mass_mock.player_queues.get_active_queue = Mock(return_value=queue)
+    mass_mock.player_queues.resume = AsyncMock()
+    mass_mock.player_queues.play_index = AsyncMock()
+
+    await provider.fallback_sendspin(player.player_id, expected_client_id=client_id)
+
+    if play_at is None:
+        mass_mock.player_queues.resume.assert_awaited_once_with(player.player_id)
+        mass_mock.player_queues.play_index.assert_not_awaited()
+    else:
+        mass_mock.player_queues.play_index.assert_awaited_once_with(
+            player.player_id, "item-1", play_at
+        )
+        mass_mock.player_queues.resume.assert_not_awaited()
+
+
 async def test_fast_track_end_between_position_reports_advances(
     provider: WebKioskProvider,
     mass_mock: Mock,

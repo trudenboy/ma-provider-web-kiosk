@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.39] - 2026-10-16
+
+### Fixed
+
+- The playback position of an HTML5 kiosk no longer keeps running when the page stops reporting it, for example after a reload or a switch to Sendspin: it holds after 10 seconds until the page reports again, and never runs past the end of the track.
+- A fallback from Sendspin to HTML5 no longer resumes past the end of the track, which left the kiosk silent and idle: when the position is at the end, the kiosk plays the last seconds of the track and then continues with the queue.
+
 ## [1.0.38] - 2026-10-16
 
 ### Fixed
