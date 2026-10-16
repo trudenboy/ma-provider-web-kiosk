@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.31] - 2026-10-16
+
+### Added
+
+- Web Kiosk players can be muted and unmuted from Music Assistant, Home Assistant or other clients without changing their volume; muting works on HTML5 and Sendspin kiosks, survives page reloads, and is available even on browsers whose volume cannot be changed.
+
 ## [1.0.30] - 2026-10-15
 
 ### Changed

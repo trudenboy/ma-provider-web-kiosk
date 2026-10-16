@@ -242,6 +242,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
             connect() { this.isConnected = true; return Promise.resolve(); }
             disconnect() { this.disconnected = true; }
             setVolume(value) { this.volume = value; }
+            setMuted(value) { this.muted = value; }
         }};
     `;
     let startupError;
@@ -1119,4 +1120,30 @@ test('position heartbeats name the playback generation they describe', async () 
     const report = socket.sent.filter(item => item.type === 'position').at(-1);
     assert.equal(report.position, 12);
     assert.equal(report.playback_generation, 'gen-7');
+});
+
+test('mute messages mute the output without changing the volume', async () => {
+    const result = await startKiosk('?sendspin=0&controls=1', [], undefined, {}, { playAllowed: () => true });
+    const socket = result.socketInstances[0];
+    const message = data => socket.onmessage({ data: JSON.stringify(data) });
+    message({ type: 'welcome', player_id: 'wk-mute' });
+    const audio = result.audioInstances[0];
+    message({ type: 'volume', level: 40 });
+    message({ type: 'mute', muted: true });
+    assert.equal(audio.muted, true);
+    assert.equal(audio.volume, 0.4);
+    message({ type: 'mute', muted: false });
+    assert.equal(audio.muted, false);
+    assert.equal(audio.volume, 0.4);
+});
+
+test('mute messages also mute an active Sendspin client', async () => {
+    const result = await startKiosk('?controls=1', [], undefined, {}, { fakeSdk:true });
+    result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'welcome', player_id:'wk-ss-mute' }) });
+    await new Promise(resolve => setImmediate(resolve));
+    const player = result.context.__sendspinPlayer;
+    result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'mute', muted:true }) });
+    assert.equal(player.muted, true);
+    result.socketInstances[0].onmessage({ data:JSON.stringify({ type:'mute', muted:false }) });
+    assert.equal(player.muted, false);
 });
