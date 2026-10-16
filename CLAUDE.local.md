@@ -79,12 +79,28 @@ of use over keeping a copy.
 
 | Copy | Source of truth | Goes stale when | Validated |
 |------|-----------------|-----------------|-----------|
-| `_enqueued_media` | queue controller's next item | an item is deleted, the queue cleared, repeat or shuffle changes without a new next item | at use: `get_next_item()` from the finished item; a stale or missing copy is replaced by that successor |
+| `_enqueued_media` | queue controller's next item | an item is deleted, the queue cleared, repeat or shuffle changes without a new next item | at use: `get_next_item()` from the finished item; a stale or missing copy is replaced by the item `load_next_queue_item()` prepares |
 | `_playback_generation` | the kiosk itself | — (identity of one play) | every browser report must carry it |
-| clock: `elapsed_time`, `_track_started_at`, `_accepted_position` | browser position reports | the page is not playing HTML5 (Sendspin mode), a report from an older stream | generation check; see #69 |
+| clock: `elapsed_time`, `_track_started_at`, `_accepted_position` | browser position reports | the page is not playing HTML5 (Sendspin mode), a report from an older stream | generation check; holds after 10 s without browser evidence and never passes the served audio; a fallback resumes inside the track (spec 0008) |
 | `_playback_speed` | queue item `playback_speed` | the item changes | set on every `play_media()` |
 | `sendspin_fallback`, `html5_requested`, active output | MA output selection | a new verified Sendspin connection, a tab change | bridge/output rules; core API tracked in #44 |
 | `_media_signatures`, `_group_signatures`, `_player_names` | MA player state | any state update | de-duplication caches only, never decisions |
+
+## Core flows are reused, not rebuilt
+
+When the kiosk does a step that Music Assistant normally does, it calls the
+public core API for the whole step, never a subset of its parts. A subset
+looks equivalent in a test and drops what the core adds later (resume
+positions, playback speed, skipping unplayable items, session checks).
+
+| Step | Core API to call |
+|------|------------------|
+| Prepare the next queue item for this player | `player_queues.load_next_queue_item()`, then `player_media_from_queue_item()` |
+| Resume a queue | `player_queues.resume()`; `play_index()` only to choose the position, as the Sendspin fallback does at the end of a track |
+| Move playback between outputs | the bridge and output rules (core API tracked in #44) |
+
+`tests/standalone/test_core_flows.py` checks the first row: a function that
+converts a queue item to player media must load it through the queue first.
 
 ## Review checklist
 
@@ -101,6 +117,7 @@ and `pr-review-toolkit:code-reviewer` to check it):
 - An announcement holding the playback lock.
 - Failure of every new task: who sees it, and what recovers?
 - Lock order and the owner of every new task.
+- Does the new code repeat a step the core does? Call the core API for the whole step (see *Core flows*).
 
 ## Gotchas
 
