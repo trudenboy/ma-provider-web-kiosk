@@ -13,8 +13,9 @@ from uuid import NAMESPACE_URL, uuid5
 
 from music_assistant_models.enums import IdentifierType, PlaybackState, PlayerFeature, PlayerType
 from music_assistant_models.errors import (
-    InvalidDataError,
+    MusicAssistantError,
     PlayerUnavailableError,
+    QueueEmpty,
     UnsupportedFeaturedException,
 )
 from music_assistant_models.player import DeviceInfo
@@ -363,21 +364,20 @@ class WebKioskPlayer(Player):
             # The handed-over item is a copy of the queue that a later edit can
             # leave stale, and a track can end before it arrives. Music
             # Assistant hands over a replacement a second later and skips it
-            # once the player is IDLE, so start the queue's successor here.
+            # once the player is IDLE, so ask the queue for the next item here.
             self.logger.debug(
-                "Handed-over item %s does not follow in the queue, starting %s",
+                "Handed-over item %s does not follow in the queue, loading %s",
                 media.queue_item_id if media else None,
                 successor.queue_item_id,
             )
             generation = self._playback_generation
-            try:
-                media = await self.mass.player_queues.player_media_from_queue_item(successor)
-            except (InvalidDataError, KeyError) as err:
-                self.logger.warning("Cannot start queue item %s: %s", successor.queue_item_id, err)
-                return False
+            loaded = await self._load_queue_successor(queue_id, current.queue_item_id)
             if generation != self._playback_generation:
                 # Other media started meanwhile and replaced the finished stream.
                 return True
+            if loaded is None:
+                return False
+            media = loaded
         await self.play_media(media)
         return True
 
@@ -583,6 +583,23 @@ class WebKioskPlayer(Player):
         if (duration := self._served_duration()) is not None:
             position = min(position, duration)
         return position
+
+    async def _load_queue_successor(
+        self, queue_id: str, finished_item_id: str
+    ) -> PlayerMedia | None:
+        """Return the next queue item as Music Assistant prepares it for a player, if any."""
+        # The queue controller owns item preparation (resume position, skipping
+        # unplayable items, playback speed across episodes). Use its loader, as
+        # its own handover does, instead of converting a bare queue item.
+        queues = self.mass.player_queues
+        try:
+            item = await queues.load_next_queue_item(queue_id, finished_item_id)
+            return await queues.player_media_from_queue_item(item)
+        except QueueEmpty:
+            return None
+        except (MusicAssistantError, KeyError) as err:
+            self.logger.warning("Cannot load the next item of queue %s: %s", queue_id, err)
+            return None
 
     def _refreshable_stream(self) -> tuple[float, float, float] | None:
         """Return song length, stream start and position of a rebuildable queue stream."""
