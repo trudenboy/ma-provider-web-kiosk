@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.36] - 2026-10-16
+
+### Fixed
+
+- Switching Repeat One off after the repeat was handed to a kiosk no longer plays the track again; the kiosk only starts a handed-over track while the queue still plays it next.
+- A kiosk page that could not be brought up to date after connecting is now disconnected and reconnects for a new attempt, and the failure is logged; previously it stayed connected without its playback state.
+- Reconnecting a Sendspin kiosk page while its Sendspin player is still starting no longer creates a second player for the same identity.
+
 ## [1.0.35] - 2026-10-16
 
 ### Changed

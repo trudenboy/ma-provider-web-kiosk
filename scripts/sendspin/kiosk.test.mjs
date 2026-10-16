@@ -236,7 +236,7 @@ async function startKiosk(search, entries = [], randomUUID, partyState = {}, opt
             return { clientId:id };
         },
         SendspinPlayer: class {
-            constructor(config) { this.config = config; this.core = {}; this.clientId = config.storage && config.storage.getItem('fake-identity') || 'b'.repeat(43); }
+            constructor(config) { window.__sdkPlayers = (window.__sdkPlayers || 0) + 1; this.config = config; this.core = {}; this.clientId = config.storage && config.storage.getItem('fake-identity') || 'b'.repeat(43); }
             get trackProgress() { return this.core.trackProgress; }
             unlock() { this.unlocks = (this.unlocks || 0) + 1; return Promise.resolve(); }
             connect() { this.isConnected = true; return Promise.resolve(); }
@@ -382,6 +382,16 @@ for (const [opusSupported, flacSupported, expected] of [
         assert.deepEqual(Array.from(result.context.__sendspinPlayer.config.codecs), expected);
     });
 }
+
+test('a welcome during a pending Sendspin start does not create a second SDK player', async () => {
+    const result = await startKiosk('', [], undefined, {}, { fakeSdk:true, secure:true, opusSupported:true, flacSupported:true });
+    const welcome = { data:JSON.stringify({ type:'welcome', player_id:'wk-once' }) };
+    result.socketInstances[0].onmessage(welcome);
+    result.socketInstances[0].onmessage(welcome);
+    for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(result.context.__sdkPlayers, 1);
+    assert.ok(result.context.__sendspinPlayer);
+});
 
 test('missing Sendspin capabilities selects HTML5 before loading the SDK', async () => {
     const result = await startKiosk('', [], undefined, {}, { noCrypto:true, fakeSdk:true });
