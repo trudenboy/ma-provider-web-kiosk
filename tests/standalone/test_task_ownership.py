@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
-PROVIDER_DIR = Path(__file__).resolve().parents[2] / "provider"
+import music_assistant.providers.web_kiosk as provider_package
+
+PROVIDER_DIR = Path(str(provider_package.__file__)).parent
 SPAWNERS = {"create_task", "ensure_future"}
 # The only functions allowed to start a task. Each one hands the task to its
 # owner: the provider (unload cancels it), a socket (closing cancels it) or a
