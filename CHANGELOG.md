@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.34] - 2026-10-16
+
+### Changed
+
+- Messages to the pages of a kiosk are delivered in the order Music Assistant issued them, so the playback state sent to a reconnecting page can no longer be overtaken by a later track change.
+
+### Fixed
+
+- A page that reconnected while the track changed no longer receives the previous track after the new one; previously its position reports were ignored and the queue could stop advancing.
+- Unloading the provider now also stops a Sendspin-to-HTML5 fallback that started after a connection timeout; previously it could keep preparing playback after the provider was unloaded.
+
 ## [1.0.33] - 2026-10-16
 
 ### Fixed
