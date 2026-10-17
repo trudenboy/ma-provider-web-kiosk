@@ -101,14 +101,14 @@ positions, playback speed, skipping unplayable items, session checks).
 | Step | Core API to call |
 |------|------------------|
 | Decide what plays next | none: the kiosk requires flow mode, plays the stream `streams.resolve_stream_url()` returns unchanged, and the queue controller's flow stream walks the queue (order, repeat, edits, crossfade, overlays) |
-| Prepare a queue item for a player | `player_queues.load_next_queue_item()`, then `player_media_from_queue_item()` |
 | Resume a queue | `player_queues.resume()`; `play_index()` only to choose the position, as the Sendspin fallback does at the end of a track |
 | Move playback between outputs | the bridge and output rules (core API tracked in #44) |
 
 The end of a stream is the end of the queue (or of radio or an announcement):
 the kiosk reports IDLE and Music Assistant's end-of-queue handling runs.
 `tests/standalone/test_core_flows.py` fails any read of the queue order and any
-queue item converted to player media without loading it through the queue.
+queue item converted to player media without loading it through
+`load_next_queue_item()` first.
 
 ## Playback started after an await
 
@@ -170,7 +170,7 @@ and `pr-review-toolkit:code-reviewer` to check it):
 - Page reload, second tab or reconnect during the operation.
 - A slow or dead socket.
 - A delayed report from an older playback (generation).
-- A page joining mid-stream: a flow URL reopened starts again at its first item.
+- A page joining or leaving mid-stream: a reopened flow URL restarts the current item, and the queue follows only the copy of the stream opened last.
 - An announcement holding the playback lock.
 - Failure of every new task: who sees it, and what recovers?
 - Lock order and the owner of every new task.

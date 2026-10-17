@@ -3,9 +3,13 @@ id: "0006"
 title: "Hand queue progression to Music Assistant via ENQUEUE"
 size: M
 status: done
+superseded_by: "0009"
 priority: P1
 effort_minutes: 40
 ---
+
+> Superseded by spec 0009: the HTML5 kiosk plays the queue's flow stream and no
+> longer advertises `ENQUEUE`.
 
 ## Problem Statement
 

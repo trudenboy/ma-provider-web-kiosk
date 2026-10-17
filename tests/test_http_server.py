@@ -242,7 +242,7 @@ async def test_ws_welcome_carries_server_version(
     await ws.close()
 
 
-async def test_ws_ended_asks_the_provider_to_advance(
+async def test_ws_ended_reports_the_stream_end_to_the_provider(
     http_client: TestClient[Any, Any], provider: WebKioskProvider
 ) -> None:
     """The browser reports track end on the player socket, without an API token."""
@@ -640,7 +640,7 @@ def _serve_flow(mass_mock: Mock, player_id: str, position: float) -> Mock:
 
 
 @pytest.mark.parametrize(("duration", "stream_duration"), [(5, 5), (180, 4)])
-async def test_delayed_ended_cannot_advance_a_replacement_stream(
+async def test_delayed_ended_cannot_end_a_replacement_stream(
     http_client: TestClient[Any, Any],
     provider: WebKioskProvider,
     mass_mock: Mock,
@@ -1055,7 +1055,8 @@ async def test_live_and_snapshot_play_messages_share_one_contract(
 
     server.broadcast_play(player)
     await mass_mock.create_task.call_args.args[0]
-    await server._send_snapshot(ws, player)
+    # A page that connects now; the one above already received this stream.
+    await server._send_snapshot(Mock(closed=False), player)
 
     plays = [message for message in sent if message["type"] == "play"]
     assert len(plays) == 2

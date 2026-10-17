@@ -544,9 +544,9 @@ class WebKioskPlayer(Player):
 
     def _refreshable_stream(self) -> tuple[float, float] | None:
         """Return the song length and position of the queue item a rebuilt stream starts at."""
-        # Reopening a flow URL starts it again at its first item, so a page
-        # that joins mid-stream always gets a stream rebuilt at the queue's
-        # current item, even in its first second.
+        # A reopened flow URL restarts the queue's current item from its start
+        # and loses the position, so a page that joins mid-stream always gets
+        # a stream rebuilt at the queue's item and position.
         media = self.current_media
         if not self._serves_flow or media is None or not media.source_id:
             return None

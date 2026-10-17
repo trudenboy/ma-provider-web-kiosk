@@ -33,7 +33,11 @@ the page receives the item's metadata and where the song starts in the stream, s
 title, artwork, progress, lyrics and the energy curve follow the queue. The end of a
 stream means the end of the queue: the kiosk reports IDLE and Music Assistant's
 end-of-queue handling runs. A page that connects mid-stream rebuilds the stream at
-the queue's position, because reopening a flow URL starts it from its first item.
+the queue's position, because a reopened flow URL restarts the current item from
+its start. A page that already received the current stream (one that started after
+it connected) is not rebuilt. Every page plays its own copy of the flow stream and
+the queue follows the copy opened last, so when a page that plays it leaves, the
+stream is rebuilt for the pages that remain.
 
 Supersedes spec 0006. Changes spec 0008: the clock is no longer capped at the
 length of the first item of a flow stream.
@@ -61,6 +65,12 @@ length of the first item of a flow stream.
    the first second of an item; a paused queue stays paused.
 7. The page reports its position every 2 seconds, so metadata follows a track
    change within about 2 seconds.
+8. A page that already received the current stream is not rebuilt on connect, and
+   no `media` message is sent for the item a `play` message announces, also when
+   Music Assistant signals the state change inside `play_media()`.
+9. When a page that plays a flow stream closes while other pages remain, the
+   stream is rebuilt at the queue position for the remaining pages. A snapshot of
+   a flow stream never carries a stream-position `seek`.
 
 ## Test Plan
 
@@ -75,11 +85,16 @@ length of the first item of a flow stream.
 - `test_flow_track_change_publishes_media_with_its_stream_start` — real HTTP server
   and queue state: one `media` message per new item with `start`, none for the item
   a play message announced.
+- `test_play_media_announces_its_first_item_once`,
+  `test_page_that_received_the_current_stream_is_not_rebuilt`,
+  `test_flow_snapshot_without_a_rebuild_sends_no_stream_seek`,
+  `test_page_leaving_a_shared_flow_rebuilds_it_for_the_others`.
 - Page: `an HTML5 media message moves the song clock without reloading audio`,
   `the song clock never passes the song duration`.
 - Manual: crossfade on, an HTML5 kiosk plays an album; tracks crossfade, the title,
   lyrics and progress follow each track; reload the page mid-track; pause and
-  resume; skip next and previous; let the queue end.
+  resume; skip next and previous; let the queue end; open a second tab of the
+  same kiosk, close the first, and check that the queue position still follows.
 
 ## Sequence Diagram
 

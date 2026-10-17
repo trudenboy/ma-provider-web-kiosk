@@ -98,7 +98,7 @@ class WebKioskHTTPServer:
         self._media_signatures: dict[str, tuple[Any, ...]] = {}
         # Per player: the playback generation and queue item its pages last
         # received metadata for during a flow stream.
-        self._flow_items: dict[str, tuple[str, str]] = {}
+        self._flow_items: dict[str, tuple[str, str | None]] = {}
         self._player_names: dict[str, str | None] = {}
         self._group_signatures: dict[str, tuple[str | None, str | None]] = {}
         self._runner: web.AppRunner | None = None
@@ -107,6 +107,8 @@ class WebKioskHTTPServer:
         self._ws_claims: dict[web.WebSocketResponse, VerifiedSendspinClaim] = {}
         self._ws_peers: dict[web.WebSocketResponse, tuple[str | None, str | None]] = {}
         self._ws_lyrics: set[web.WebSocketResponse] = set()
+        # The playback generation of the last play message each page was sent.
+        self._ws_played: dict[web.WebSocketResponse, str] = {}
         self._ws_tasks: dict[web.WebSocketResponse, set[asyncio.Future[Any]]] = {}
         self._outbound_locks: dict[str, asyncio.Lock] = {}
         self.party = PartyAdapter(provider)
@@ -155,10 +157,10 @@ class WebKioskHTTPServer:
             return
         seq = self.provider.next_wave_seq(player_id)
         msg = self._play_message(player, wave_seq=seq)
-        self._note_flow_item(player)
         for ws in list(clients):
             if not ws.closed:
                 self._post(ws, msg, player_id)
+                self._ws_played[ws] = player.playback_generation
         # The browser may have no Music Assistant token. The curve still
         # belongs to the track this player is already decoding.
         self.provider.spawn_wave(player_id, seq, player.current_media)
@@ -447,9 +449,17 @@ class WebKioskHTTPServer:
         ):
             return
         player_id = player.player_id
-        if self._flow_items.get(player_id) == (player.playback_generation, media.queue_item_id):
+        generation = player.playback_generation
+        shown = self._flow_items.get(player_id)
+        if shown is None or shown[0] != generation:
+            # The play message of this stream announced its first item. Music
+            # Assistant signals state changes inside play_media(), before that
+            # message is sent, so the first item is known from the media.
+            started = player.current_media
+            shown = (generation, started.queue_item_id if started else None)
+        if shown == (generation, media.queue_item_id):
             return
-        self._flow_items[player_id] = (player.playback_generation, media.queue_item_id)
+        self._flow_items[player_id] = (generation, media.queue_item_id)
         queue = self.provider.mass.player_queues.get(media.source_id) if media.source_id else None
         speed = queue.playback_speed if queue and queue.playback_speed > 0 else 1.0
         song = queue.corrected_elapsed_time if queue else 0.0
@@ -733,25 +743,42 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
             if preparation is not None:
                 preparation.cancel()
                 await asyncio.gather(preparation, return_exceptions=True)
-            self._forget_socket(player_id, ws)
-            self._update_volume_support(player_id)
-            self._update_output_mode(player_id)
-            if not self._ws_clients.get(player_id):
-                self._media_signatures.pop(player_id, None)
-                self._player_names.pop(player_id, None)
-                self._group_signatures.pop(player_id, None)
-                self._ws_clients.pop(player_id, None)
-                lock = self._outbound_locks.get(player_id)
-                if lock is not None and not lock.locked():
-                    del self._outbound_locks[player_id]
-                offline_player = self.provider.mass.players.get_player(player_id)
-                if offline_player and isinstance(offline_player, WebKioskPlayer):
-                    offline_player.on_ws_disconnected()
-                # Gone for good only if nothing reconnects. A reload does.
-                self.provider.schedule_player_close(player_id)
+            await self._close_socket(player_id, ws)
             logger.debug("WebSocket client disconnected for player %s", player_id)
 
         return ws
+
+    async def _close_socket(self, player_id: str, ws: web.WebSocketResponse) -> None:
+        """Forget a closed page and settle what its player still needs."""
+        played = self._ws_played.get(ws)
+        self._forget_socket(player_id, ws)
+        self._update_volume_support(player_id)
+        self._update_output_mode(player_id)
+        if not self._ws_clients.get(player_id):
+            self._media_signatures.pop(player_id, None)
+            self._player_names.pop(player_id, None)
+            self._group_signatures.pop(player_id, None)
+            self._ws_clients.pop(player_id, None)
+            lock = self._outbound_locks.get(player_id)
+            if lock is not None and not lock.locked():
+                del self._outbound_locks[player_id]
+            offline_player = self.provider.mass.players.get_player(player_id)
+            if offline_player and isinstance(offline_player, WebKioskPlayer):
+                offline_player.on_ws_disconnected()
+            # Gone for good only if nothing reconnects. A reload does.
+            self.provider.schedule_player_close(player_id)
+            self._flow_items.pop(player_id, None)
+        elif (
+            isinstance(kiosk := self.provider.mass.players.get_player(player_id), WebKioskPlayer)
+            and kiosk.serves_flow
+            and played == kiosk.playback_generation
+        ):
+            try:
+                await self.provider.run_owned(self._rebuild_flow_for_pages(kiosk))
+            except Exception:
+                # Nothing else awaits this. The pages keep playing; only the
+                # queue's position may stop following them.
+                logger.exception("Rebuilding the flow stream for %s failed", player_id)
 
     async def _prepare_page(self, ws: web.WebSocketResponse, player: WebKioskPlayer | None) -> None:
         """Move playback to the page's output if needed and send it the play state."""
@@ -802,6 +829,14 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         if player.sendspin_client_id and player.active_output_protocol == player.sendspin_client_id:
             self._publish_effective_media(player, force=True)
             return
+        # A stream that started after this page connected (moving playback off
+        # Sendspin, a play meanwhile) already reached it and starts where the
+        # queue is. Rebuilding it would restart it on every page.
+        if self._ws_played.get(ws) == player.playback_generation:
+            async with self._outbound_lock(player.player_id):
+                for message in self._volume_messages(player):
+                    await self._ws_send(ws, message, player.player_id)
+            return
         # Rebuilding the stream seeks (and re-pauses) the player: provider work
         # that finishes even when this page goes away meanwhile.
         refreshed = player.can_refresh_stream() and await self.provider.run_owned(
@@ -812,35 +847,62 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         # track change made meanwhile reaches every page after the snapshot,
         # never before an obsolete part of it.
         async with self._outbound_lock(player.player_id):
+            stream = self._stream_messages(player)
             messages = self._volume_messages(player)
-            media = player.current_media
-            if media is None:
+            if stream is None:
                 for message in messages:
                     await self._ws_send(ws, message, player.player_id)
                 return
-            wave_seq = self.provider.next_wave_seq(player.player_id)
-            play = self._play_message(player, wave_seq=wave_seq)
-            self._note_flow_item(player)
-            # Position inside the served audio, including while paused. The song
-            # clock on screen is start + this value. A paused reconnect used to
-            # skip it and open the track at 0:00.
-            position = []
-            if (elapsed := player.elapsed_time) is not None and elapsed >= 1:
-                position.append(json.dumps({"type": "seek", "position": int(elapsed)}))
-            if player.playback_state == PlaybackState.PAUSED:
-                position.append(json.dumps({"type": "pause"}))
-            messages = [play, *position, *messages]
+            wave_seq, play = stream
+            messages = [*play, *messages]
             # A rebuilt stream replaces the one every page plays. Other pages get
             # it through their own sockets, queued right behind this snapshot.
             if refreshed:
                 for client in tuple(self._ws_clients.get(player.player_id, ())):
                     if client is not ws:
-                        for message in messages:
+                        for message in play:
                             self._post(client, message, player.player_id)
+                        self._ws_played[client] = player.playback_generation
             for message in messages:
                 await self._ws_send(ws, message, player.player_id)
+            self._ws_played[ws] = player.playback_generation
         self.provider.spawn_wave(player.player_id, wave_seq)
         self.provider.spawn_lyrics(player.player_id, wave_seq)
+
+    async def _rebuild_flow_for_pages(self, player: WebKioskPlayer) -> None:
+        """Rebuild a flow stream for the pages still playing it after another page left."""
+        # Every page plays its own copy of the flow stream, and the queue
+        # follows only the copy opened last. When that page closes, the queue
+        # loses track of the rest, so all remaining pages get a new stream.
+        if not await player.refresh_stream():
+            return
+        async with self._outbound_lock(player.player_id):
+            if (stream := self._stream_messages(player)) is None:
+                return
+            wave_seq, play = stream
+            for client in tuple(self._ws_clients.get(player.player_id, ())):
+                if not client.closed:
+                    for message in play:
+                        self._post(client, message, player.player_id)
+                    self._ws_played[client] = player.playback_generation
+        self.provider.spawn_wave(player.player_id, wave_seq)
+        self.provider.spawn_lyrics(player.player_id, wave_seq)
+
+    def _stream_messages(self, player: WebKioskPlayer) -> tuple[int, list[str]] | None:
+        """Return the curve generation and the messages that start the player's stream."""
+        if player.current_media is None:
+            return None
+        wave_seq = self.provider.next_wave_seq(player.player_id)
+        messages = [self._play_message(player, wave_seq=wave_seq)]
+        # Position inside the served audio, including while paused. The song
+        # clock on screen is start + this value. A paused reconnect used to skip
+        # it and open the track at 0:00. A flow stream cannot be entered at a
+        # position: it is rebuilt at the queue position instead.
+        if not player.serves_flow and (elapsed := player.elapsed_time) is not None and elapsed >= 1:
+            messages.append(json.dumps({"type": "seek", "position": int(elapsed)}))
+        if player.playback_state == PlaybackState.PAUSED:
+            messages.append(json.dumps({"type": "pause"}))
+        return wave_seq, messages
 
     def _volume_messages(self, player: WebKioskPlayer) -> list[str]:
         """Return the MA volume level and mute state for freshly connected pages."""
@@ -1087,14 +1149,6 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         payload.update({key: value for key, value in optional.items() if value is not None})
         return json.dumps(payload)
 
-    def _note_flow_item(self, player: WebKioskPlayer) -> None:
-        """Remember the queue item a play message announced for a flow stream."""
-        media = player.current_media
-        if player.serves_flow and media is not None and media.queue_item_id:
-            self._flow_items[player.player_id] = (player.playback_generation, media.queue_item_id)
-        else:
-            self._flow_items.pop(player.player_id, None)
-
     def _owner_socket(
         self, player_id: str, client_id: str | None = None
     ) -> web.WebSocketResponse | None:
@@ -1211,6 +1265,7 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         self._ws_peers.pop(ws, None)
         self._ws_lyrics.discard(ws)
         self._ws_volume_support.pop(ws, None)
+        self._ws_played.pop(ws, None)
         # Work for a page ends with its socket. The handler awaits its own task.
         current = asyncio.current_task()
         for task in self._ws_tasks.pop(ws, set()):

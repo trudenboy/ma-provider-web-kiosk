@@ -199,7 +199,6 @@ def _playing_at_end(player: object) -> None:
         queue_item_id="item-1",
     )
     player._attr_elapsed_time = 29  # type: ignore[attr-defined]
-    player._track_end_handled = False  # type: ignore[attr-defined]
 
 
 async def test_concurrent_tabs_share_one_registered_player(
@@ -889,10 +888,10 @@ async def test_lyrics_are_looked_up_only_for_kiosks_showing_them(
     provider.http_server.lyrics_requested.assert_called_with("wk_test")
 
 
-async def test_track_end_without_enqueued_media_goes_idle(
+async def test_stream_end_goes_idle_and_leaves_the_queue_to_music_assistant(
     provider: WebKioskProvider, mass_mock: Mock, player: WebKioskPlayer
 ) -> None:
-    """With nothing handed over, the kiosk reports IDLE and leaves the queue to MA."""
+    """At the end of its stream the kiosk reports IDLE and issues no queue command."""
     _playing_at_end(player)
     mass_mock.players.get_player.return_value = player
     mass_mock.player_queues.play_index = AsyncMock()
