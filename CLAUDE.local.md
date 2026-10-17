@@ -80,7 +80,7 @@ of use over keeping a copy.
 
 | Copy | Source of truth | Goes stale when | Validated |
 |------|-----------------|-----------------|-----------|
-| `_enqueued_media` | queue controller's next item | an item is deleted, the queue cleared, repeat or shuffle changes without a new next item | at use: `get_next_item()` from the finished item; a stale or missing copy is replaced by the item `load_next_queue_item()` prepares |
+| `_enqueued_media` | queue controller's next item | an item is deleted, the queue cleared, repeat or shuffle changes without a new next item | at use: `get_next_item()` from the finished item; a stale or missing copy is replaced by the item `load_next_queue_item()` prepares; that item is checked again with `get_item()` after loading and loaded anew if a queue edit removed it |
 | `_playback_generation` | the kiosk itself | — (identity of one play) | every browser report must carry it |
 | clock: `elapsed_time`, `_track_started_at`, `_accepted_position` | browser position reports | the page is not playing HTML5 (Sendspin mode), a report from an older stream | generation check; holds after 10 s without browser evidence and never passes the served audio; a fallback resumes inside the track (spec 0008) |
 | `_playback_speed` | queue item `playback_speed` | the item changes | set on every `play_media()` |
@@ -122,17 +122,20 @@ no lock, and an announcement must not be blocked. So:
   or a newer play changes the generation; an unregistered or replaced player
   is no longer the registered instance. If the check fails, return without
   playing or stopping anything: someone else owns the player now.
-- **Keep the last pause.** If the player is PAUSED after the await, start the
-  playback and pause it, so the page holds the new stream and a later play
-  resumes it. When starting awaits too (the fallback's resume), pause only if
-  `command_count` is unchanged since the pause was read: a later play or stop
-  wins.
+- **Keep the user's last command.** Take `transport_mark()` before the wait.
+  Once playback has started, call `wants_pause(mark)` and pause if it says so.
+  A pause, play or stop issued since the mark wins; without one, the pause
+  state at the mark does. Starting playback (`play_media()`, a queue
+  seek/resume) sets PLAYING, so a pause that landed during preparation would
+  otherwise be lost. The page then holds the new stream, and a later play
+  resumes it.
 - **Never leave taken-over state behind.** Every exit after
   `take_over_output()` that does not start a stream undoes it.
 
-`tests/standalone/test_commit_after_await.py` checks the re-check: in an async
-function, a playback start after an await must follow a `still_plays()` call
-that comes after that await.
+`tests/standalone/test_commit_after_await.py` checks both rules in an async
+function. A playback start after an await must follow a `still_plays()` call
+that comes after that await. A playback start or seek after an await must be
+followed by a `wants_pause()` call.
 
 ## Review checklist
 
@@ -149,7 +152,8 @@ and `pr-review-toolkit:code-reviewer` to check it):
 - An announcement holding the playback lock.
 - Failure of every new task: who sees it, and what recovers?
 - Lock order and the owner of every new task.
-- Does new code start playback after an await? Capture the generation, re-check `still_plays()`, keep a pause (see *Playback started after an await*).
+- Does new code start playback after an await? Capture the generation and a `transport_mark()`, re-check `still_plays()`, then apply `wants_pause()` (see *Playback started after an await*).
+- Does new code use something it loaded or looked up before an await (a queue item, a player)? Check it again after the await.
 - Does the new code repeat a step the core does? Call the core API for the whole step (see *Core flows*).
 
 ## Gotchas
