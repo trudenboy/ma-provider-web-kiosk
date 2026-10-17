@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from unittest.mock import AsyncMock, Mock
 
@@ -11,6 +12,7 @@ from music_assistant_models.enums import PlaybackState, PlayerFeature
 from music_assistant_models.player import PlayerMedia
 
 import music_assistant.providers.web_kiosk.player as player_module
+from music_assistant.providers.web_kiosk.http_server import WebKioskHTTPServer
 from music_assistant.providers.web_kiosk.player import WebKioskPlayer, media_timeline
 
 
@@ -85,13 +87,16 @@ async def test_play_media_reports_song_length_and_stream_start(player: WebKioskP
     media = _media()
     media.duration = 208
     media.stream_duration = 62
-    player.provider.http_server = Mock()  # type: ignore[attr-defined]
+    server = WebKioskHTTPServer(player.provider, 0)  # type: ignore[arg-type]
+    server._ws_clients[player.player_id] = {Mock(closed=False)}
+    server._post = Mock()  # type: ignore[method-assign]
+    player.provider.http_server = server  # type: ignore[attr-defined]
 
     await player.play_media(media)
 
-    kwargs = player.provider.http_server.broadcast_play.call_args.kwargs  # type: ignore[attr-defined]
-    assert kwargs["duration"] == 208.0
-    assert kwargs["start"] == 146.0
+    message = json.loads(server._post.call_args.args[1])
+    assert message["duration"] == 208.0
+    assert message["start"] == 146.0
 
 
 async def test_pause_snapshots_elapsed_time(player: WebKioskPlayer) -> None:

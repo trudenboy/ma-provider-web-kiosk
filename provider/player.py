@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
     from music_assistant.mass import MusicAssistant
 
+    from .http_server import WebKioskHTTPServer
     from .ownership import VerifiedSendspinClaim
     from .provider import WebKioskProvider
 
@@ -374,19 +375,8 @@ class WebKioskPlayer(Player):
         self._track_end_handled = False
         self.update_state()
 
-        if not self._skip_ws_notify:
-            song_length, stream_start = media_timeline(media)
-            cast("WebKioskProvider", self.provider).notify_play_started(
-                self.player_id,
-                playback_generation=self.playback_generation,
-                title=media.title,
-                artist=media.artist,
-                image_url=media.image_url,
-                duration=song_length,
-                start=stream_start,
-                playback_speed=self.playback_speed,
-                media=media,
-            )
+        if not self._skip_ws_notify and (pages := self._pages()) is not None:
+            pages.broadcast_play(self)
 
     async def enqueue_next_media(self, media: PlayerMedia) -> None:
         """Keep the next queue item until the current browser stream ends."""
@@ -584,8 +574,8 @@ class WebKioskPlayer(Player):
         self._attr_playback_state = PlaybackState.PAUSED
         self._attr_elapsed_time_last_updated = time.time()
         self.update_state()
-        if not self._skip_ws_notify:
-            cast("WebKioskProvider", self.provider).notify_play_paused(self.player_id)
+        if not self._skip_ws_notify and (pages := self._pages()) is not None:
+            pages.broadcast_pause(self.player_id)
 
     async def stop(self) -> None:
         """Handle STOP command."""
@@ -601,7 +591,8 @@ class WebKioskPlayer(Player):
         self._clock_evidence_at = None
         self.current_stream_url = None
         self.update_state()
-        cast("WebKioskProvider", self.provider).notify_play_stopped(self.player_id)
+        if (pages := self._pages()) is not None:
+            pages.broadcast_stop(self.player_id)
 
     async def volume_set(self, volume_level: int) -> None:
         """Handle VOLUME_SET command."""
@@ -609,15 +600,15 @@ class WebKioskPlayer(Player):
             raise UnsupportedFeaturedException("Use the device volume controls")
         self._attr_volume_level = volume_level
         self.update_state()
-        if not self._skip_ws_notify:
-            cast("WebKioskProvider", self.provider).notify_volume(self.player_id, volume_level)
+        if not self._skip_ws_notify and (pages := self._pages()) is not None:
+            pages.broadcast_volume(self.player_id, volume_level)
 
     async def volume_mute(self, muted: bool) -> None:
         """Handle VOLUME_MUTE command without changing the volume level."""
         self._attr_volume_muted = muted
         self.update_state()
-        if not self._skip_ws_notify:
-            cast("WebKioskProvider", self.provider).notify_mute(self.player_id, muted)
+        if not self._skip_ws_notify and (pages := self._pages()) is not None:
+            pages.broadcast_mute(self.player_id, muted)
 
     async def seek(self, position_seconds: int) -> None:
         """Handle SEEK command — send seek action to the kiosk via WebSocket."""
@@ -627,8 +618,8 @@ class WebKioskPlayer(Player):
         if self._track_started_at > 0:
             self._track_started_at = time.monotonic() - float(position_seconds)
         self.update_state()
-        if not self._skip_ws_notify:
-            cast("WebKioskProvider", self.provider).notify_seek(self.player_id, position_seconds)
+        if not self._skip_ws_notify and (pages := self._pages()) is not None:
+            pages.broadcast_seek(self.player_id, position_seconds)
 
     def update_position(self, position: float) -> None:
         """
@@ -798,6 +789,10 @@ class WebKioskPlayer(Player):
             return None
         return float(duration) / self._playback_speed
 
+    def _pages(self) -> WebKioskHTTPServer | None:
+        """Return the server that sends messages to this player's pages, while it runs."""
+        return cast("WebKioskProvider", self.provider).http_server
+
     def _uses_sendspin_output(self) -> bool:
         """Return whether the browser asked for Sendspin and its linked output can play."""
         client_id = self.sendspin_client_id
@@ -814,5 +809,5 @@ class WebKioskPlayer(Player):
         self._attr_elapsed_time_last_updated = time.time()
         self._clock_evidence_at = time.monotonic()
         self.update_state()
-        if not self._skip_ws_notify:
-            cast("WebKioskProvider", self.provider).notify_play_resumed(self.player_id)
+        if not self._skip_ws_notify and (pages := self._pages()) is not None:
+            pages.broadcast_resume(self.player_id)

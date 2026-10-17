@@ -139,38 +139,26 @@ class WebKioskHTTPServer:
             self._runner = None
         logger.info("Web Kiosk HTTP server stopped")
 
-    def broadcast_play(
-        self,
-        player_id: str,
-        *,
-        playback_generation: str,
-        title: str | None = None,
-        artist: str | None = None,
-        image_url: str | None = None,
-        duration: float | None = None,
-        start: float = 0,
-        playback_speed: float = 1.0,
-        wave_seq: int | None = None,
-    ) -> None:
-        """Notify subscribed WebSocket clients to start playback with metadata."""
+    def broadcast_play(self, player: WebKioskPlayer) -> None:
+        """
+        Send the player's current stream and its metadata to the player's pages.
+
+        :param player: The kiosk player that started new media.
+        """
+        player_id = player.player_id
         clients = self._ws_clients.get(player_id, set())
         if not clients:
             logger.debug("broadcast_play: no WebSocket clients for player_id=%s", player_id)
             return
-        msg = self._play_message(
-            player_id,
-            playback_generation=playback_generation,
-            title=title,
-            artist=artist,
-            image_url=image_url,
-            duration=duration,
-            start=start,
-            playback_speed=playback_speed,
-            wave_seq=wave_seq,
-        )
+        seq = self.provider.next_wave_seq(player_id)
+        msg = self._play_message(player, wave_seq=seq)
         for ws in list(clients):
             if not ws.closed:
                 self._post(ws, msg, player_id)
+        # The browser may have no Music Assistant token. The curve still
+        # belongs to the track this player is already decoding.
+        self.provider.spawn_wave(player_id, seq, player.current_media)
+        self.provider.spawn_lyrics(player_id, seq, player.current_media)
 
     def broadcast_wave(self, player_id: str, seq: int, bins: list[float] | None) -> None:
         """Send the stored energy curve for the track that just started."""
@@ -784,19 +772,8 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
                 for message in messages:
                     await self._ws_send(ws, message, player.player_id)
                 return
-            song_length, stream_start = media_timeline(media)
             wave_seq = self.provider.next_wave_seq(player.player_id)
-            play = self._play_message(
-                player.player_id,
-                playback_generation=player.playback_generation,
-                title=media.title,
-                artist=media.artist,
-                image_url=media.image_url,
-                duration=song_length,
-                start=stream_start,
-                playback_speed=player.playback_speed,
-                wave_seq=wave_seq,
-            )
+            play = self._play_message(player, wave_seq=wave_seq)
             # Position inside the served audio, including while paused. The song
             # clock on screen is start + this value. A paused reconnect used to
             # skip it and open the track at 0:00.
@@ -1042,34 +1019,25 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         else:
             logger.debug("Unknown WS message type from %s: %s", player_id, msg_type)
 
-    def _play_message(
-        self,
-        player_id: str,
-        *,
-        playback_generation: str,
-        title: str | None,
-        artist: str | None,
-        image_url: str | None,
-        duration: float | None,
-        start: float,
-        playback_speed: float,
-        wave_seq: int | None,
-    ) -> str:
+    def _play_message(self, player: WebKioskPlayer, *, wave_seq: int) -> str:
         """Build the one play message used for live playback and reconnect snapshots."""
+        player_id = player.player_id
+        media = player.current_media
+        duration, start = media_timeline(media)
         payload: dict[str, Any] = {
             "type": "play",
             "path": f"/stream/{player_id}?token={self.provider.get_stream_token(player_id)}",
             "player_id": player_id,
-            "playback_generation": playback_generation,
+            "playback_generation": player.playback_generation,
             # Where audio.currentTime 0 sits in the song. Non-zero after a seek,
             # because the stream Music Assistant serves then starts at that point.
             "start": start,
-            "playback_speed": playback_speed,
+            "playback_speed": player.playback_speed,
         }
         optional = {
-            "title": title,
-            "artist": artist,
-            "image_url": image_url,
+            "title": media.title if media else None,
+            "artist": media.artist if media else None,
+            "image_url": media.image_url if media else None,
             "duration": duration,
             "wave_seq": wave_seq,
         }

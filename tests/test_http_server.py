@@ -958,7 +958,12 @@ async def test_play_broadcast_carries_playback_speed(
     server._ws_send = AsyncMock()  # type: ignore[method-assign]
     mass_mock.create_task = Mock(side_effect=lambda coro: coro)
 
-    server.broadcast_play("wk_test", playback_generation="gen", playback_speed=2.0)
+    provider.spawn_wave = Mock()  # type: ignore[method-assign]
+    provider.spawn_lyrics = Mock()  # type: ignore[method-assign]
+    player = WebKioskPlayer(provider, "wk_test")
+    player._playback_speed = 2.0
+
+    server.broadcast_play(player)
     await mass_mock.create_task.call_args.args[0]
 
     sent = server._ws_send.await_args
@@ -1070,17 +1075,7 @@ async def test_live_and_snapshot_play_messages_share_one_contract(
         PlayerMedia(uri="x", duration=120, title="T", artist="A", image_url="img")
     )
 
-    server.broadcast_play(
-        player.player_id,
-        playback_generation=player.playback_generation,
-        title="T",
-        artist="A",
-        image_url="img",
-        duration=120,
-        start=0,
-        playback_speed=1.0,
-        wave_seq=1,
-    )
+    server.broadcast_play(player)
     await mass_mock.create_task.call_args.args[0]
     await server._send_snapshot(ws, player)
 

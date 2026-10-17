@@ -800,17 +800,22 @@ async def test_play_index_publishes_wave_and_lyrics_of_the_dispatched_item(
             ("new line", None) if media is dispatched.media_item else ("old", None)
         )
     )
-    provider.http_server = Mock()
+    server = WebKioskHTTPServer(provider, 0)
+    page = Mock(closed=False)
+    server._ws_clients["wk_test"] = {page}
+    server._ws_lyrics.add(page)
+    server._post = Mock()  # type: ignore[method-assign]
+    server.broadcast_wave = Mock()  # type: ignore[method-assign]
+    server.broadcast_lyrics = Mock()  # type: ignore[method-assign]
+    provider.http_server = server
 
     await player.play_media(
         PlayerMedia(uri="new", duration=180, source_id="wk_test", queue_item_id="new-item")
     )
     await asyncio.gather(*tasks)
 
-    assert provider.http_server.broadcast_wave.call_args.args[2] == [1.0]
-    assert provider.http_server.broadcast_lyrics.call_args.args[2] == [
-        {"t": None, "text": "new line"}
-    ]
+    assert server.broadcast_wave.call_args.args[2] == [1.0]
+    assert server.broadcast_lyrics.call_args.args[2] == [{"t": None, "text": "new line"}]
 
 
 @pytest.mark.parametrize(
@@ -1496,20 +1501,17 @@ async def test_successor_loaded_for_a_replaced_player_is_not_committed(
     loading, release = await _suspend_successor_load(queues)
     replacement = WebKioskPlayer(provider, player.player_id)
 
-    with (
-        patch.object(provider, "notify_play_started") as started,
-        patch.object(provider, "notify_play_stopped") as stopped,
-    ):
-        advance = asyncio.create_task(
-            provider._advance_after_track("wk_test", player.playback_generation)
-        )
-        await asyncio.wait_for(loading.wait(), 1)
-        mass_mock.players.get_player.return_value = replacement
-        release.set()
-        await advance
+    provider.http_server = pages = Mock()
+    advance = asyncio.create_task(
+        provider._advance_after_track("wk_test", player.playback_generation)
+    )
+    await asyncio.wait_for(loading.wait(), 1)
+    mass_mock.players.get_player.return_value = replacement
+    release.set()
+    await advance
 
-    started.assert_not_called()
-    stopped.assert_not_called()
+    pages.broadcast_play.assert_not_called()
+    pages.broadcast_stop.assert_not_called()
     assert player.current_media is not None
     assert player.current_media.queue_item_id == "item-1"
 

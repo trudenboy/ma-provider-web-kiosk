@@ -323,38 +323,6 @@ class WebKioskProvider(PlayerProvider):
         await self._handle_player_unregister(player_id, permanent=True)
         self.logger.info("Player %s removed by user", player_id)
 
-    def notify_play_started(
-        self,
-        player_id: str,
-        *,
-        playback_generation: str,
-        title: str | None = None,
-        artist: str | None = None,
-        image_url: str | None = None,
-        duration: float | None = None,
-        start: float = 0,
-        playback_speed: float = 1.0,
-        media: PlayerMedia | None = None,
-    ) -> None:
-        """Notify the kiosk WebSocket client that playback started."""
-        if self.http_server:
-            seq = self.next_wave_seq(player_id)
-            self.http_server.broadcast_play(
-                player_id,
-                playback_generation=playback_generation,
-                title=title,
-                artist=artist,
-                image_url=image_url,
-                duration=duration,
-                start=start,
-                playback_speed=playback_speed,
-                wave_seq=seq,
-            )
-            # The browser may have no Music Assistant token. The curve still
-            # belongs to the track this player is already decoding.
-            self.spawn_wave(player_id, seq, media)
-            self.spawn_lyrics(player_id, seq, media)
-
     def next_wave_seq(self, player_id: str) -> int:
         """Return the next energy-curve generation for this player."""
         seq = self._wave_seq.get(player_id, 0) + 1
@@ -523,36 +491,6 @@ class WebKioskProvider(PlayerProvider):
         :param playback_generation: The playback instance that failed.
         """
         self._spawn(self._stop_failed_playback(player_id, playback_generation))
-
-    def notify_play_paused(self, player_id: str) -> None:
-        """Notify the kiosk WebSocket client that playback is paused."""
-        if self.http_server:
-            self.http_server.broadcast_pause(player_id)
-
-    def notify_play_resumed(self, player_id: str) -> None:
-        """Notify the kiosk WebSocket client that playback resumed."""
-        if self.http_server:
-            self.http_server.broadcast_resume(player_id)
-
-    def notify_play_stopped(self, player_id: str) -> None:
-        """Notify the kiosk WebSocket client that playback stopped."""
-        if self.http_server:
-            self.http_server.broadcast_stop(player_id)
-
-    def notify_seek(self, player_id: str, position_seconds: int) -> None:
-        """Notify the kiosk WebSocket client to seek to position."""
-        if self.http_server:
-            self.http_server.broadcast_seek(player_id, position_seconds)
-
-    def notify_mute(self, player_id: str, muted: bool) -> None:
-        """Notify the kiosk WebSocket clients of a mute change."""
-        if self.http_server:
-            self.http_server.broadcast_mute(player_id, muted)
-
-    def notify_volume(self, player_id: str, volume_level: int) -> None:
-        """Notify the kiosk WebSocket client of a volume change."""
-        if self.http_server:
-            self.http_server.broadcast_volume(player_id, volume_level)
 
     def get_stream_token(self, player_id: str) -> str:
         """
