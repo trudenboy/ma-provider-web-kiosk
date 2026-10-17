@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Dragging the progress slider to the end of a track, or skipping forward near its end, no longer seeks past the audio. The last two seconds play and the queue moves on.
+- A stopped kiosk shows 0:00 instead of the position where its stream ended.
 
 ## [1.0.44] - 2026-10-17
 
