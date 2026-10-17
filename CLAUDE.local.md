@@ -64,7 +64,8 @@ controller; `tests/test_invariants.py` proves the check is active.
    commands for the player and its group. MA's own commands take it too, so
    calling an MA playback command counts as taking it. The announcement
    controller holds it until the player reports IDLE: never make the page's
-   path to IDLE wait for it.
+   path to IDLE wait for it. Queue pause does not take it, so holding it does
+   not order a pause after kiosk work (see *Playback started after an await*).
 2. **Provider player lock** — `WebKioskProvider._player_lock`. Registration,
    identity ownership, bridge lifecycle, unload.
 3. **Outbound channel** — `WebKioskHTTPServer._outbound_lock(player_id)`.
@@ -83,6 +84,7 @@ of use over keeping a copy.
 | `_playback_generation` | the kiosk itself | — (identity of one play) | every browser report must carry it |
 | clock: `elapsed_time`, `_track_started_at`, `_accepted_position` | browser position reports | the page is not playing HTML5 (Sendspin mode), a report from an older stream | generation check; holds after 10 s without browser evidence and never passes the served audio; a fallback resumes inside the track (spec 0008) |
 | `_playback_speed` | queue item `playback_speed` | the item changes | set on every `play_media()` |
+| `current_media`, state and clock taken over from the output (`take_over_output()`) | the Sendspin output's state | the HTML5 stream starts, or the fallback ends without one | replaced by `play_media()` of the fallback's resume; every other exit calls `abandon_takeover()` (IDLE) or, after a failed teardown, hands the output back to Sendspin and stops it when a pause or stop arrived meanwhile |
 | `sendspin_fallback`, `html5_requested`, active output | MA output selection | a new verified Sendspin connection, a tab change | bridge/output rules; core API tracked in #44 |
 | `_media_signatures`, `_group_signatures`, `_player_names` | MA player state | any state update | de-duplication caches only, never decisions |
 
@@ -98,9 +100,39 @@ positions, playback speed, skipping unplayable items, session checks).
 | Prepare the next queue item for this player | `player_queues.load_next_queue_item()`, then `player_media_from_queue_item()` |
 | Resume a queue | `player_queues.resume()`; `play_index()` only to choose the position, as the Sendspin fallback does at the end of a track |
 | Move playback between outputs | the bridge and output rules (core API tracked in #44) |
+| Choose the stream route | `streams.resolve_stream_url()`; the kiosk still replaces `/flow/` with `/single/` because the page plays one stream per item (known deviation, #81) |
 
 `tests/standalone/test_core_flows.py` checks the first row: a function that
 converts a queue item to player media must load it through the queue first.
+
+## Playback started after an await
+
+Kiosk work that awaits and then starts playback (the next queue item after a
+track end, the resume after a Sendspin fallback) competes with the user's
+commands. Holding the playback lock does not order them: queue pause takes
+no lock, and an announcement must not be blocked. So:
+
+- **Commands reach the kiosk during the wait.** A flow that moves playback to
+  the kiosk calls `take_over_output()` before its first await. From then on a
+  pause or stop is handled by the kiosk itself, not by the output being torn
+  down. On a Sendspin output, which has no pause, the core would turn a pause
+  into a stop.
+- **Re-check after the await.** Capture `playback_generation` before the
+  await and start playback only if `still_plays(generation)` is true. A stop
+  or a newer play changes the generation; an unregistered or replaced player
+  is no longer the registered instance. If the check fails, return without
+  playing or stopping anything: someone else owns the player now.
+- **Keep the last pause.** If the player is PAUSED after the await, start the
+  playback and pause it, so the page holds the new stream and a later play
+  resumes it. When starting awaits too (the fallback's resume), pause only if
+  `command_count` is unchanged since the pause was read: a later play or stop
+  wins.
+- **Never leave taken-over state behind.** Every exit after
+  `take_over_output()` that does not start a stream undoes it.
+
+`tests/standalone/test_commit_after_await.py` checks the re-check: in an async
+function, a playback start after an await must follow a `still_plays()` call
+that comes after that await.
 
 ## Review checklist
 
@@ -117,6 +149,7 @@ and `pr-review-toolkit:code-reviewer` to check it):
 - An announcement holding the playback lock.
 - Failure of every new task: who sees it, and what recovers?
 - Lock order and the owner of every new task.
+- Does new code start playback after an await? Capture the generation, re-check `still_plays()`, keep a pause (see *Playback started after an await*).
 - Does the new code repeat a step the core does? Call the core API for the whole step (see *Core flows*).
 
 ## Gotchas

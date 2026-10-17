@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.40] - 2026-10-17
+
+### Fixed
+
+- Pausing while the next track is being prepared no longer lets that track start playing. The track starts paused instead.
+- A kiosk that was replaced or removed while its next track was being prepared no longer starts or stops playback on the browser that replaced it.
+- Pausing while playback moves from Sendspin to the browser's own audio now pauses it. Before, the pause was carried out as a stop once the move finished.
+
 ## [1.0.39] - 2026-10-16
 
 ### Fixed
