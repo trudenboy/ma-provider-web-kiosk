@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.41] - 2026-10-17
+
+### Fixed
+
+- The next track no longer fails to play when the item was removed from the queue while it was being prepared. The track after it plays instead.
+- A pause no longer gets lost when it arrives while the track is prepared after falling back from Sendspin, or while the stream is rebuilt for a page that reconnected.
+
 ## [1.0.40] - 2026-10-17
 
 ### Fixed
