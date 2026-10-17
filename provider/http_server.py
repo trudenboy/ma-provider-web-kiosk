@@ -96,6 +96,9 @@ class WebKioskHTTPServer:
         self.app.on_cleanup.append(self._unsubscribe_player_updates)
         self._unsubscribe_state_updates: Callable[[], None] | None = None
         self._media_signatures: dict[str, tuple[Any, ...]] = {}
+        # Per player: the playback generation and queue item its pages last
+        # received metadata for during a flow stream.
+        self._flow_items: dict[str, tuple[str, str]] = {}
         self._player_names: dict[str, str | None] = {}
         self._group_signatures: dict[str, tuple[str | None, str | None]] = {}
         self._runner: web.AppRunner | None = None
@@ -152,6 +155,7 @@ class WebKioskHTTPServer:
             return
         seq = self.provider.next_wave_seq(player_id)
         msg = self._play_message(player, wave_seq=seq)
+        self._note_flow_item(player)
         for ws in list(clients):
             if not ws.closed:
                 self._post(ws, msg, player_id)
@@ -353,6 +357,7 @@ class WebKioskHTTPServer:
             self._unsubscribe_state_updates()
             self._unsubscribe_state_updates = None
         self._media_signatures.clear()
+        self._flow_items.clear()
         self._player_names.clear()
         self._group_signatures.clear()
 
@@ -393,11 +398,13 @@ class WebKioskHTTPServer:
                 self._post(ws, message, player.player_id)
 
     def _publish_effective_media(self, player: WebKioskPlayer, *, force: bool = False) -> None:
-        """Publish a new metadata generation for an active linked Sendspin output."""
+        """Publish a new metadata generation when the track the pages hear changes."""
         if (
             not player.sendspin_client_id
             or player.active_output_protocol != player.sendspin_client_id
         ):
+            if player.serves_flow:
+                self._publish_flow_item(player)
             return
         media = (
             player.state.current_media
@@ -428,6 +435,45 @@ class WebKioskHTTPServer:
         else:
             self.broadcast_wave(player.player_id, seq, None)
             self.broadcast_lyrics(player.player_id, seq, [])
+
+    def _publish_flow_item(self, player: WebKioskPlayer) -> None:
+        """Send the pages the queue's new current item while they play its flow stream."""
+        state = player.state
+        media = state.current_media
+        if (
+            state.playback_state not in (PlaybackState.PLAYING, PlaybackState.PAUSED)
+            or media is None
+            or not media.queue_item_id
+        ):
+            return
+        player_id = player.player_id
+        if self._flow_items.get(player_id) == (player.playback_generation, media.queue_item_id):
+            return
+        self._flow_items[player_id] = (player.playback_generation, media.queue_item_id)
+        queue = self.provider.mass.player_queues.get(media.source_id) if media.source_id else None
+        speed = queue.playback_speed if queue and queue.playback_speed > 0 else 1.0
+        song = queue.corrected_elapsed_time if queue else 0.0
+        stream = player.corrected_elapsed_time or 0.0
+        seq = self.provider.next_wave_seq(player_id)
+        message = json.dumps(
+            {
+                "type": "media",
+                "wave_seq": seq,
+                "title": media.title or "",
+                "artist": media.artist or "",
+                "image_url": media.image_url,
+                "duration": media.duration,
+                # The song second at stream second 0: the page draws the song
+                # clock as start + its stream position x speed.
+                "start": song - stream * speed,
+                "playback_speed": speed,
+            }
+        )
+        for ws in list(self._ws_clients.get(player_id, set())):
+            if not ws.closed:
+                self._post(ws, message, player_id)
+        self.provider.spawn_wave(player_id, seq)
+        self.provider.spawn_lyrics(player_id, seq)
 
     @web.middleware
     async def _cache_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:
@@ -774,6 +820,7 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
                 return
             wave_seq = self.provider.next_wave_seq(player.player_id)
             play = self._play_message(player, wave_seq=wave_seq)
+            self._note_flow_item(player)
             # Position inside the served audio, including while paused. The song
             # clock on screen is start + this value. A paused reconnect used to
             # skip it and open the track at 0:00.
@@ -1010,11 +1057,7 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         elif msg_type == "ended":
             generation = msg.get("playback_generation")
             if isinstance(generation, str) and generation:
-                position = msg.get("position")
-                if _is_finite_position(position):
-                    self.provider.track_ended(player_id, generation, position=float(position))
-                else:
-                    self.provider.track_ended(player_id, generation)
+                self.provider.track_ended(player_id, generation)
             self.provider.on_player_activity(player_id)
         else:
             logger.debug("Unknown WS message type from %s: %s", player_id, msg_type)
@@ -1043,6 +1086,14 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
         }
         payload.update({key: value for key, value in optional.items() if value is not None})
         return json.dumps(payload)
+
+    def _note_flow_item(self, player: WebKioskPlayer) -> None:
+        """Remember the queue item a play message announced for a flow stream."""
+        media = player.current_media
+        if player.serves_flow and media is not None and media.queue_item_id:
+            self._flow_items[player.player_id] = (player.playback_generation, media.queue_item_id)
+        else:
+            self._flow_items.pop(player.player_id, None)
 
     def _owner_socket(
         self, player_id: str, client_id: str | None = None

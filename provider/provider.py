@@ -471,17 +471,14 @@ class WebKioskProvider(PlayerProvider):
         """
         self._spawn(self._fallback_sendspin_safely(player_id, client_id))
 
-    def track_ended(
-        self, player_id: str, playback_generation: str, *, position: float | None = None
-    ) -> None:
+    def track_ended(self, player_id: str, playback_generation: str) -> None:
         """
-        Advance the queue after the browser finishes its audio file.
+        End the playback after the browser finished its stream.
 
         :param player_id: The kiosk player that finished playback.
         :param playback_generation: The playback instance the browser finished.
-        :param position: The final position in seconds into the served audio, if reported.
         """
-        self._spawn(self._advance_after_track(player_id, playback_generation, position))
+        self._spawn(self._finish_playback(player_id, playback_generation))
 
     def playback_failed(self, player_id: str, playback_generation: str) -> None:
         """
@@ -521,16 +518,7 @@ class WebKioskProvider(PlayerProvider):
             logger.debug("No media provided")
             return None
         try:
-            stream_url = await self.mass.streams.resolve_stream_url(player_id, media)
-            flow_prefix = f"{self.mass.streams.base_url}/flow/"
-            if stream_url.startswith(flow_prefix):
-                # MA may force flow for crossfade/overlays despite requires_flow_mode=False.
-                # The page plays one stream per queue item, so it takes the per-item
-                # route, which shares the session, item and codec URL suffix. This
-                # leaves out crossfade and overlays until the page can follow a
-                # continuous stream.
-                return f"{self.mass.streams.base_url}/single/{stream_url.removeprefix(flow_prefix)}"
-            return stream_url
+            return await self.mass.streams.resolve_stream_url(player_id, media)
         except MusicAssistantError as err:
             logger.warning("Failed to resolve MA stream URL: %s", err, exc_info=True)
             return None
@@ -686,10 +674,8 @@ class WebKioskProvider(PlayerProvider):
         # Report IDLE like a finished stream; the queue stays where it is.
         await player.stop()
 
-    async def _advance_after_track(
-        self, player_id: str, playback_generation: str, position: float | None = None
-    ) -> None:
-        """Start the handed-over queue item, or report IDLE when there is none."""
+    async def _finish_playback(self, player_id: str, playback_generation: str) -> None:
+        """Report IDLE once the browser has played its stream to the end."""
         # These reports only change the kiosk's own state and issue no Music
         # Assistant command, so they take no playback lock: an announcement holds
         # that lock until this player reports IDLE. The generation check and the
@@ -700,27 +686,11 @@ class WebKioskProvider(PlayerProvider):
             return
         if playback_generation != player.playback_generation:
             return
-        # Position reports are periodic. The final one arrives with the end
-        # report, so a fast stream ending between reports still completes.
-        if position is not None:
-            player.update_position(position)
-        if player._track_end_handled:
-            return
-        # One end event per play. play_media clears this when the next item starts.
-        player._track_end_handled = True
-        # The browser reports the end of the current stream only once. A stream
-        # that stops well before the song ends was cut short, so it ends like a
-        # failed playback: IDLE, with the queue left on the unfinished item.
-        if not player.playback_reached_end():
-            logger.warning("Kiosk %s stream ended before the end of the song", player_id)
-            await player.stop()
-            return
-        # Music Assistant hands the next queue item over in advance and follows
-        # the player's current media, so queue progression stays in the core.
-        # With nothing after the finished item (end of queue, announcement) the
-        # player reports IDLE and the core's own end-of-queue and restore logic runs.
-        if not await player.start_enqueued_media():
-            await player.stop()
+        # A queue plays as one flow stream, so its end is the end of the queue;
+        # other media (radio, an announcement) is a stream of its own. Either
+        # way the kiosk reports IDLE and Music Assistant's end-of-queue and
+        # announcement-restore handling decides what follows.
+        await player.stop()
 
     async def _hand_back_output(
         self, player: WebKioskPlayer, client_id: str, generation: str, err: BaseException

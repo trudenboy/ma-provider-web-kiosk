@@ -52,17 +52,14 @@ def test_guard_detects_a_conversion_without_loading(tmp_path: Path) -> None:
 
 
 ORDER_READ = "items"
-WALK = "_queue_walk"
 
 
-def _order_reads_outside_walk(path: Path) -> list[tuple[int, str]]:
-    """Return (line, function) for every read of the queue order outside the walk builder."""
+def _order_reads(path: Path) -> list[tuple[int, str]]:
+    """Return (line, function) for every read of the queue order."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     found: list[tuple[int, str]] = []
     for function in ast.walk(tree):
         if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        if function.name == WALK:
             continue
         for node in ast.walk(function):
             if (
@@ -77,19 +74,19 @@ def _order_reads_outside_walk(path: Path) -> list[tuple[int, str]]:
 
 
 @pytest.mark.parametrize("path", sorted(PROVIDER_DIR.glob("*.py")), ids=lambda path: path.name)
-def test_queue_order_is_read_with_its_repeat_mode(path: Path) -> None:
-    """Which item follows another depends on the repeat mode, so order is never read alone."""
-    assert _order_reads_outside_walk(path) == []
+def test_queue_order_is_left_to_the_queue_controller(path: Path) -> None:
+    """The flow stream decides what plays next; the kiosk never walks the queue itself."""
+    assert _order_reads(path) == []
 
 
-def test_guard_detects_a_bare_order_read(tmp_path: Path) -> None:
-    """The guard reports an order read outside the walk builder and accepts one inside it."""
+def test_guard_detects_an_order_read(tmp_path: Path) -> None:
+    """The guard reports a read of the queue order and ignores other queue calls."""
     sample = tmp_path / "sample.py"
     sample.write_text(
-        "def bare(self, queue_id):\n"
+        "def walk(self, queue_id):\n"
         "    return self.mass.player_queues.items(queue_id)\n\n"
-        "def _queue_walk(self, queue_id):\n"
-        "    return self.mass.player_queues.items(queue_id)\n",
+        "def current(self, queue_id):\n"
+        "    return self.mass.player_queues.get(queue_id)\n",
         encoding="utf-8",
     )
-    assert _order_reads_outside_walk(sample) == [(2, "bare")]
+    assert _order_reads(sample) == [(2, "walk")]

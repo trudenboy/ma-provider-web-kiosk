@@ -151,22 +151,6 @@ async def test_seek_updates_elapsed(player: WebKioskPlayer) -> None:
     )
 
 
-def test_playback_reached_end_includes_seek_origin(player: WebKioskPlayer) -> None:
-    """A short remainder after a seek still counts as the end of the song."""
-    player._attr_current_media = Mock(duration=30, stream_duration=4)
-    player._attr_elapsed_time = 3
-
-    assert player.playback_reached_end() is True
-
-
-def test_playback_reached_end_is_false_early_in_the_song(player: WebKioskPlayer) -> None:
-    """The first seconds of a track are not the end."""
-    player._attr_current_media = Mock(duration=180, stream_duration=None)
-    player._attr_elapsed_time = 2
-
-    assert player.playback_reached_end() is False
-
-
 def test_update_position_ignored_while_paused(player: WebKioskPlayer) -> None:
     """Position reports are dropped unless the player is PLAYING."""
     player._attr_playback_state = PlaybackState.PAUSED
@@ -175,20 +159,6 @@ def test_update_position_ignored_while_paused(player: WebKioskPlayer) -> None:
     player.update_position(99.0)
 
     assert player.elapsed_time == 5.0
-
-
-async def test_fast_stream_completion_uses_media_seconds(
-    player: WebKioskPlayer, mass_mock: Mock
-) -> None:
-    """A 300-second track at 2x completes after 150 browser seconds."""
-    mass_mock.player_queues.get.return_value = Mock(
-        current_item=Mock(extra_attributes={"playback_speed": 2.0})
-    )
-    await player.play_media(
-        PlayerMedia(uri="podcast", duration=300, stream_duration=300, source_id="wk_test")
-    )
-    player.note_seek(150)
-    assert player.playback_reached_end()
 
 
 async def test_slow_stream_progress_is_not_capped_in_media_seconds(
@@ -203,52 +173,6 @@ async def test_slow_stream_progress_is_not_capped_in_media_seconds(
     )
     player.note_seek(400)
     assert player.elapsed_time == 400
-    assert not player.playback_reached_end()
-
-
-async def test_fast_reconnect_seeks_in_media_seconds(
-    player: WebKioskPlayer, mass_mock: Mock
-) -> None:
-    """The media seek origin is added after converting stream time at 2x."""
-    mass_mock.player_queues.get.return_value = Mock(
-        current_item=Mock(extra_attributes={"playback_speed": 2.0})
-    )
-    mass_mock.player_queues.get_item.return_value = Mock(extra_attributes={"playback_speed": 2.0})
-    await player.play_media(
-        PlayerMedia(
-            uri="podcast",
-            duration=300,
-            stream_duration=200,
-            source_id="wk_test",
-            queue_item_id="item",
-        )
-    )
-    player.note_seek(40)
-    mass_mock.players.cmd_seek = AsyncMock()
-    await player.pause()
-    await player.refresh_stream()
-    mass_mock.players.cmd_seek.assert_awaited_once_with("wk_test", 180)
-
-
-@pytest.mark.parametrize(("position", "expected"), [(299.6, 298), (300, 298), (150.7, 150)])
-async def test_reconnect_seek_leaves_the_end_of_the_track_to_play(
-    player: WebKioskPlayer, mass_mock: Mock, position: float, expected: int
-) -> None:
-    """A rebuild at the track boundary seeks a little before the end, not past the audio."""
-    await player.play_media(
-        PlayerMedia(
-            uri="track",
-            duration=300,
-            stream_duration=300,
-            source_id="wk_test",
-            queue_item_id="item",
-        )
-    )
-    player.note_seek(position)
-    mass_mock.players.cmd_seek = AsyncMock()
-    await player.pause()
-    await player.refresh_stream()
-    mass_mock.players.cmd_seek.assert_awaited_once_with("wk_test", expected)
 
 
 async def test_speed_is_read_from_the_dispatched_item_before_queue_advances(
@@ -262,18 +186,29 @@ async def test_speed_is_read_from_the_dispatched_item_before_queue_advances(
     await player.play_media(
         PlayerMedia(uri="new-podcast", duration=300, source_id="wk_test", queue_item_id="next")
     )
-    player.note_seek(150)
-    assert player.playback_reached_end()
+    assert player.playback_speed == 2.0
+
+
+def _serve_flow(mass_mock: Mock, item_id: str, position: float) -> None:
+    """Resolve queue media to a flow stream whose queue sits at item_id and position."""
+    mass_mock.streams.base_url = "http://ma.local:8097"
+    mass_mock.streams.resolve_stream_url = AsyncMock(
+        return_value="http://ma.local:8097/flow/session/wk_test/item/wk_test.mp3"
+    )
+    mass_mock.player_queues.get.return_value = Mock(
+        current_item=Mock(queue_item_id=item_id, duration=180),
+        corrected_elapsed_time=position,
+    )
 
 
 async def test_reconnect_waiting_behind_a_track_change_does_not_seek_it(
     player: WebKioskPlayer, mass_mock: Mock
 ) -> None:
-    """A reconnect reads position and pause state only after a pending track change."""
+    """A stream started while a reconnect waits reached every page; it is not rebuilt."""
+    _serve_flow(mass_mock, "old", 90)
     await player.play_media(
         PlayerMedia(uri="old", duration=180, source_id="wk_test", queue_item_id="old")
     )
-    player.note_seek(90)
     await player.pause()
     mass_mock.players.cmd_seek = AsyncMock()
     mass_mock.players.cmd_pause = AsyncMock()
@@ -303,10 +238,10 @@ async def test_pause_during_a_reconnect_seek_is_kept(
     player: WebKioskPlayer, mass_mock: Mock
 ) -> None:
     """A pause issued while the stream is rebuilt is not overwritten by the new stream."""
+    _serve_flow(mass_mock, "item", 60)
     await player.play_media(
         PlayerMedia(uri="song", duration=180, source_id="wk_test", queue_item_id="item")
     )
-    player.note_seek(60)
     mass_mock.players.cmd_pause = AsyncMock()
 
     async def seek_with_a_pause(_player_id: str, _position: int) -> None:
@@ -321,34 +256,6 @@ async def test_pause_during_a_reconnect_seek_is_kept(
     await player.refresh_stream()
 
     mass_mock.players.cmd_pause.assert_awaited_once_with("wk_test")
-
-
-def test_kiosk_advertises_enqueue_without_flow_mode(player: WebKioskPlayer) -> None:
-    """Music Assistant hands the next queue item to the kiosk instead of a flow stream."""
-    assert PlayerFeature.ENQUEUE in player.supported_features
-    assert not player.requires_flow_mode
-
-
-async def test_enqueue_next_media_is_replaced_and_cleared(player: WebKioskPlayer) -> None:
-    """A later handover replaces the stored item; new playback and stop clear it."""
-    await player.play_media(PlayerMedia(uri="a", duration=60, source_id="wk_test"))
-    first = PlayerMedia(uri="b", duration=60, source_id="wk_test", queue_item_id="b")
-    second = PlayerMedia(uri="c", duration=60, source_id="wk_test", queue_item_id="c")
-
-    def enqueued() -> PlayerMedia | None:
-        return player.enqueued_media
-
-    await player.enqueue_next_media(first)
-    await player.enqueue_next_media(second)
-    assert enqueued() is second
-    assert player.current_media is not None
-    assert player.current_media.uri == "a"
-
-    await player.play_media(PlayerMedia(uri="d", duration=60, source_id="wk_test"))
-    assert enqueued() is None
-    await player.enqueue_next_media(first)
-    await player.stop()
-    assert enqueued() is None
 
 
 @pytest.mark.parametrize("volume_control", [True, False])

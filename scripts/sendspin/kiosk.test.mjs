@@ -1040,6 +1040,34 @@ test('HTML5 clock and lyrics use media time for a sped-up stream', async () => {
 });
 
 
+test('an HTML5 media message moves the song clock without reloading audio', async () => {
+    const result = await startKiosk('?sendspin=0&controls=1', [], undefined, {}, {playAllowed:()=>true});
+    const message = data => result.socketInstances[0].onmessage({data:JSON.stringify(data)});
+    message({type:'welcome',player_id:'wk-flow'});
+    message({type:'play',path:'/flow',title:'First',duration:200,start:0,playback_speed:1,wave_seq:1,playback_generation:'g'});
+    const audio = result.audioInstances[0];
+    const source = audio.src;
+    audio.currentTime = 230;
+    // The queue moved on to the second song, which started at stream second 200.
+    message({type:'media',wave_seq:2,title:'Second',artist:'B',duration:180,start:-200,playback_speed:1});
+    audio.ontimeupdate();
+    assert.equal(result.elements.get('kiosk-time').textContent,'0:30');
+    assert.equal(result.elements.get('kiosk-dur').textContent,'3:00');
+    assert.equal(audio.src, source);
+    assert.equal(audio.paused, false);
+});
+
+test('the song clock never passes the song duration', async () => {
+    const result = await startKiosk('?sendspin=0&controls=1', [], undefined, {}, {playAllowed:()=>true});
+    const message = data => result.socketInstances[0].onmessage({data:JSON.stringify(data)});
+    message({type:'welcome',player_id:'wk-flow-end'});
+    message({type:'play',path:'/flow',title:'First',duration:200,start:0,playback_speed:1,wave_seq:1,playback_generation:'g'});
+    // The next song is already playing; its metadata has not arrived yet.
+    result.audioInstances[0].currentTime = 203;
+    result.audioInstances[0].ontimeupdate();
+    assert.equal(result.elements.get('kiosk-time').textContent,'3:20');
+});
+
 test('kiosk proves its SDK identity before receiving registration welcome', async () => {
     const result = await startKiosk('');
     const socket = result.socketInstances[0];
@@ -1126,7 +1154,7 @@ test('position heartbeats name the playback generation they describe', async () 
     message({ type: 'welcome', player_id: 'wk-pos' });
     message({ type: 'play', path: '/track', duration: 60, playback_generation: 'gen-7' });
     result.audioInstances[0].currentTime = 12;
-    result.intervals.find(interval => interval.delay === 5000).callback();
+    result.intervals.find(interval => interval.delay === 2000).callback();
     const report = socket.sent.filter(item => item.type === 'position').at(-1);
     assert.equal(report.position, 12);
     assert.equal(report.playback_generation, 'gen-7');

@@ -14,12 +14,15 @@ Browser (sendspin-js) --Sendspin--> Sendspin provider <-- WebKioskSendspinBridge
 ```
 
 - `provider.py` — `WebKioskProvider`: player registration on demand, idle and
-  disconnect cleanup, track-end and failure handling, Sendspin fallback,
+  disconnect cleanup, stream-end and failure handling, Sendspin fallback,
   provider-owned background work.
-- `player.py` — `WebKioskPlayer`: playback commands, the playback generation,
-  the browser clock, the queue item MA handed over in advance (`ENQUEUE`).
+- `player.py` — `WebKioskPlayer`: a flow-mode player (spec 0009). Playback
+  commands, the playback generation, the browser clock, rebuilding the queue's
+  flow stream for a page that joins mid-stream. It sends page messages through
+  the page server directly.
 - `http_server.py` — `WebKioskHTTPServer`: kiosk page, URL builder, stream
-  redirect, the push WebSocket and everything sent to pages.
+  redirect, the push WebSocket and everything sent to pages, including the
+  metadata of each new queue item during a flow stream.
 - `sendspin_bridge.py` — bridges a verified browser Sendspin identity to the
   kiosk player; the connect watchdog that triggers HTML5 fallback.
 - `ownership.py` — Sendspin identity proof (challenge/response).
@@ -80,13 +83,13 @@ of use over keeping a copy.
 
 | Copy | Source of truth | Goes stale when | Validated |
 |------|-----------------|-----------------|-----------|
-| `_enqueued_media` | queue controller's next item | an item is deleted, the queue cleared, repeat or shuffle changes without a new next item | at use: `get_next_item()` from the finished item; a stale or missing copy is replaced by the item `load_next_queue_item()` prepares; the repeat mode and the queue walk from the finished item to the loaded one (wrapping past the end, as Repeat All does) are compared before and after loading, and the item is loaded anew if an edit or a repeat change touched them |
 | `_playback_generation` | the kiosk itself | — (identity of one play) | every browser report must carry it |
-| clock: `elapsed_time`, `_track_started_at`, `_accepted_position` | browser position reports | the page is not playing HTML5 (Sendspin mode), a report from an older stream | generation check; holds after 10 s without browser evidence and never passes the served audio; a fallback resumes inside the track (spec 0008) |
+| clock: `elapsed_time`, `_track_started_at`, `_accepted_position` | browser position reports (seconds into the served stream; for a flow stream, the whole queue) | the page is not playing HTML5 (Sendspin mode), a report from an older stream | generation check; holds after 10 s without browser evidence and never passes a single stream's audio; the queue maps a flow position to its current item (spec 0008, 0009) |
+| `serves_flow` | `streams.resolve_stream_url()` | the next `play_media()` | resolved on every `play_media()` |
 | `_playback_speed` | queue item `playback_speed` | the item changes | set on every `play_media()` |
 | `current_media`, state and clock taken over from the output (`take_over_output()`) | the Sendspin output's state | the HTML5 stream starts, or the fallback ends without one | replaced by `play_media()` of the fallback's resume; every other exit calls `abandon_takeover()` (IDLE) or, after a failed teardown, hands the output back to Sendspin and stops it when a pause or stop arrived meanwhile |
 | `sendspin_fallback`, `html5_requested`, active output | MA output selection | a new verified Sendspin connection, a tab change | bridge/output rules; core API tracked in #44 |
-| `_media_signatures`, `_group_signatures`, `_player_names` | MA player state | any state update | de-duplication caches only, never decisions |
+| `_media_signatures`, `_group_signatures`, `_player_names`, `_flow_items` | MA player state | any state update | de-duplication caches only, never decisions |
 
 ## Core flows are reused, not rebuilt
 
@@ -97,26 +100,20 @@ positions, playback speed, skipping unplayable items, session checks).
 
 | Step | Core API to call |
 |------|------------------|
-| Prepare the next queue item for this player | `player_queues.load_next_queue_item()`, then `player_media_from_queue_item()` |
+| Decide what plays next | none: the kiosk requires flow mode, plays the stream `streams.resolve_stream_url()` returns unchanged, and the queue controller's flow stream walks the queue (order, repeat, edits, crossfade, overlays) |
+| Prepare a queue item for a player | `player_queues.load_next_queue_item()`, then `player_media_from_queue_item()` |
 | Resume a queue | `player_queues.resume()`; `play_index()` only to choose the position, as the Sendspin fallback does at the end of a track |
 | Move playback between outputs | the bridge and output rules (core API tracked in #44) |
-| Choose the stream route | `streams.resolve_stream_url()`; the kiosk still replaces `/flow/` with `/single/` because the page plays one stream per item (known deviation, #81) |
 
-`tests/standalone/test_core_flows.py` checks the first row: a function that
-converts a queue item to player media must load it through the queue first.
-
-Which item follows another depends on the queue's repeat mode as much as on
-its order: Repeat One follows an item with itself, Repeat All follows the last
-item with the first. The kiosk reads the order only through `_queue_walk()`,
-which returns it together with the repeat mode (`QueueWalk`), and
-`QueueWalk.span()` walks the queue the way the loader does. The same test
-file fails a queue order read anywhere else. Tests of queue order cover
-Repeat Off, One and All.
+The end of a stream is the end of the queue (or of radio or an announcement):
+the kiosk reports IDLE and Music Assistant's end-of-queue handling runs.
+`tests/standalone/test_core_flows.py` fails any read of the queue order and any
+queue item converted to player media without loading it through the queue.
 
 ## Playback started after an await
 
-Kiosk work that awaits and then starts playback (the next queue item after a
-track end, the resume after a Sendspin fallback) competes with the user's
+Kiosk work that awaits and then starts playback (the resume after a Sendspin
+fallback, the stream rebuilt for a reconnecting page) competes with the user's
 commands. Holding the playback lock does not order them: queue pause takes
 no lock, and an announcement must not be blocked. So:
 
@@ -166,13 +163,13 @@ and `pr-review-toolkit:code-reviewer` to check it):
 - Page reload, second tab or reconnect during the operation.
 - A slow or dead socket.
 - A delayed report from an older playback (generation).
-- Queue edits after a handover: delete, clear, repeat, shuffle.
+- A page joining mid-stream: a flow URL reopened starts again at its first item.
 - An announcement holding the playback lock.
 - Failure of every new task: who sees it, and what recovers?
 - Lock order and the owner of every new task.
 - Does new code start playback after an await? Capture the generation and a `transport_mark()`, re-check `still_plays()`, then apply `wants_pause()` (see *Playback started after an await*).
 - Does new code use something it loaded or looked up before an await (a queue item, a player)? Check it again after the await.
-- Does new code reason about which queue item follows another? Use `QueueWalk` and test Repeat Off, One and All.
+- Does new code decide which queue item plays next? Leave it to the flow stream (see *Core flows*).
 - Does new code start a stream at a position? Compute it with `resume_position()` and test it at the track boundary.
 - Does the new code repeat a step the core does? Call the core API for the whole step (see *Core flows*).
 

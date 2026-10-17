@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- HTML5 kiosks play the queue as one continuous stream, as Music Assistant chooses for them. Crossfade and audio overlays now apply, and queue order, repeat and edits are handled by Music Assistant itself. The title, artwork, progress, lyrics and visualizer follow each track change within about two seconds.
+- A page that connects while the queue is playing starts at the queue's current track and position.
+
 ## [1.0.44] - 2026-10-17
 
 ### Fixed
