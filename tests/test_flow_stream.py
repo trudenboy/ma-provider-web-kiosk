@@ -107,6 +107,7 @@ async def test_reconnect_rebuilds_a_flow_stream_at_the_queue_position(
         corrected_elapsed_time=position,
     )
     mass_mock.players.cmd_seek = AsyncMock()
+    mass_mock.players.get_player.return_value = player
 
     assert player.can_refresh_stream()
     assert await player.refresh_stream()

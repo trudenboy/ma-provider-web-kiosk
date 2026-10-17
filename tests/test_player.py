@@ -242,7 +242,7 @@ async def test_pause_during_a_reconnect_seek_is_kept(
     await player.play_media(
         PlayerMedia(uri="song", duration=180, source_id="wk_test", queue_item_id="item")
     )
-    mass_mock.players.cmd_pause = AsyncMock()
+    mass_mock.players.get_player.return_value = player
 
     async def seek_with_a_pause(_player_id: str, _position: int) -> None:
         # Queue pause takes no playback lock; it lands while the seek prepares.
@@ -253,9 +253,11 @@ async def test_pause_during_a_reconnect_seek_is_kept(
 
     mass_mock.players.cmd_seek = AsyncMock(side_effect=seek_with_a_pause)
 
-    await player.refresh_stream()
+    assert await player.refresh_stream()
 
-    mass_mock.players.cmd_pause.assert_awaited_once_with("wk_test")
+    assert player.current_media is not None
+    assert player.current_media.uri == "song@60"
+    assert player.playback_state == PlaybackState.PAUSED
 
 
 @pytest.mark.parametrize("volume_control", [True, False])

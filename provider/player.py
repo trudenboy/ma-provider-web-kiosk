@@ -6,9 +6,9 @@ import math
 import re
 import secrets
 import time
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, contextmanager
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import NAMESPACE_URL, uuid5
 
 from music_assistant_models.enums import IdentifierType, PlaybackState, PlayerFeature, PlayerType
@@ -35,13 +35,6 @@ if TYPE_CHECKING:
 CLOCK_HOLD_AFTER = 10.0
 # Seconds of a track left to play when playback resumes at or past its end.
 END_MARGIN = 2
-
-
-class TransportMark(NamedTuple):
-    """The play, pause and stop commands the player had handled at one moment."""
-
-    commands: int
-    paused: bool
 
 
 def playback_lock(mass: MusicAssistant, player_id: str) -> AbstractAsyncContextManager[None]:
@@ -339,72 +332,19 @@ class WebKioskPlayer(Player):
         if not self._skip_ws_notify and (pages := self._pages()) is not None:
             pages.broadcast_play(self)
 
-    def transport_mark(self) -> TransportMark:
-        """Return the play, pause and stop commands this player has handled so far."""
-        return TransportMark(self._command_count, self._attr_playback_state == PlaybackState.PAUSED)
-
-    def wants_pause(self, mark: TransportMark) -> bool:
+    def claim(self, *, take_over: bool = False) -> PlaybackClaim:
         """
-        Return whether playback that just started should be paused.
+        Return the right to start playback after an await (see PlaybackClaim).
 
-        The last play, pause or stop since the mark decides; without one the
-        pause state at the mark does.
+        Take it before the first await, and release it in a finally block.
 
-        :param mark: The transport mark taken before the playback was prepared.
+        :param take_over: Continue the active output's playback as this player's own
+            first, so that commands issued while the output is torn down reach this
+            player instead of being lost with the output.
         """
-        if self._command_count != mark.commands:
-            paused = self._commanded_state == PlaybackState.PAUSED
-        else:
-            paused = mark.paused
-        return paused and self._attr_playback_state != PlaybackState.IDLE
-
-    def still_plays(self, generation: str) -> bool:
-        """
-        Return whether this player is still registered and still runs the given playback.
-
-        :param generation: The playback generation captured before an await.
-        """
-        return (
-            generation == self._playback_generation
-            and self.mass.players.get_player(self.player_id) is self
-        )
-
-    def take_over_output(self) -> None:
-        """
-        Continue the playback of the active output protocol as this player's own.
-
-        From now on playback commands reach this player instead of the output,
-        so a command issued while the output is torn down is not lost. Starts a
-        new playback generation.
-        """
-        state = self.state
-        self._playback_generation = secrets.token_hex(16)
-        self._serves_flow = False
-        self._attr_current_media = state.current_media
-        self._attr_playback_state = state.playback_state
-        self._attr_elapsed_time = state.elapsed_time
-        self._attr_elapsed_time_last_updated = state.elapsed_time_last_updated
-        # No browser stream plays this yet: no evidence to hold the clock on,
-        # and no start time to check reports against.
-        self._clock_evidence_at = None
-        self._track_started_at = 0.0
-        self.set_active_output_protocol("native")
-
-    def abandon_takeover(self, generation: str) -> None:
-        """
-        Drop the playback taken over from an output when no stream replaced it.
-
-        :param generation: The playback generation that take_over_output() started.
-        """
-        if not self.still_plays(generation):
-            return
-        self._playback_generation = secrets.token_hex(16)
-        self._attr_playback_state = PlaybackState.IDLE
-        self._attr_current_media = None
-        self._attr_elapsed_time = None
-        self._attr_elapsed_time_last_updated = None
-        self._clock_evidence_at = None
-        self.update_state()
+        if take_over:
+            self._take_over_output()
+        return PlaybackClaim(self, took_over=take_over)
 
     def can_refresh_stream(self) -> bool:
         """Return whether the current media is a queue flow stream that can be rebuilt."""
@@ -417,27 +357,24 @@ class WebKioskPlayer(Player):
         # it until this player reports IDLE, which needs the page to play it.
         if self._refreshable_stream() is None:
             return False
-        generation = self._playback_generation
-        # Read the queue position and pause state only once a pending track
-        # change has finished, and keep the lock through the seek and re-pause.
-        async with playback_lock(self.mass, self.player_id):
-            # A stream started while this waited went to every page, this one
-            # included, and starts where the queue is: nothing to rebuild.
-            if (
-                self._playback_generation != generation
-                or (stream := self._refreshable_stream()) is None
-            ):
-                return False
-            duration, position = stream
-            mark = self.transport_mark()
-            with self.suppress_ws_notify():
-                await self.mass.players.cmd_seek(
-                    self.player_id, resume_position(duration, position)
-                )
-                # A pause during the seek (queue pause takes no lock) is kept too.
-                if self.wants_pause(mark):
-                    await self.mass.players.cmd_pause(self.player_id)
-            return True
+        claim = self.claim()
+        try:
+            # Read the queue position and pause state only once a pending track
+            # change has finished, and keep the lock through the seek and re-pause.
+            async with playback_lock(self.mass, self.player_id):
+                # A stream started while this waited went to every page, this one
+                # included, and starts where the queue is: nothing to rebuild.
+                if not claim.owns_player or (stream := self._refreshable_stream()) is None:
+                    return False
+                duration, position = stream
+                with self.suppress_ws_notify():
+                    return await claim.start(
+                        lambda: self.mass.players.cmd_seek(
+                            self.player_id, resume_position(duration, position)
+                        )
+                    )
+        finally:
+            claim.release()
 
     async def play(self) -> None:
         """Handle PLAY (resume) command."""
@@ -634,6 +571,31 @@ class WebKioskPlayer(Player):
             return None
         return float(duration) / self._playback_speed
 
+    def _take_over_output(self) -> None:
+        """Continue the playback of the active output protocol as this player's own."""
+        state = self.state
+        self._playback_generation = secrets.token_hex(16)
+        self._serves_flow = False
+        self._attr_current_media = state.current_media
+        self._attr_playback_state = state.playback_state
+        self._attr_elapsed_time = state.elapsed_time
+        self._attr_elapsed_time_last_updated = state.elapsed_time_last_updated
+        # No browser stream plays this yet: no evidence to hold the clock on,
+        # and no start time to check reports against.
+        self._clock_evidence_at = None
+        self._track_started_at = 0.0
+        self.set_active_output_protocol("native")
+
+    def _drop_takeover(self) -> None:
+        """Drop playback taken over from an output that no stream replaced (IDLE)."""
+        self._playback_generation = secrets.token_hex(16)
+        self._attr_playback_state = PlaybackState.IDLE
+        self._attr_current_media = None
+        self._attr_elapsed_time = None
+        self._attr_elapsed_time_last_updated = None
+        self._clock_evidence_at = None
+        self.update_state()
+
     async def _resolves_to_flow(self, media: PlayerMedia) -> bool:
         """Return whether Music Assistant serves this media as a flow stream of its queue."""
         try:
@@ -664,3 +626,71 @@ class WebKioskPlayer(Player):
         self.update_state()
         if not self._skip_ws_notify and (pages := self._pages()) is not None:
             pages.broadcast_resume(self.player_id)
+
+
+class PlaybackClaim:
+    """
+    The right to start one playback on a kiosk after awaiting something else.
+
+    Work that awaits and then starts playback competes with the user's commands:
+    queue pause takes no playback lock, and an announcement must not be blocked.
+    A claim records who owns the player and the user's last command when it is
+    taken. Playback started through it starts only while the claim still owns the
+    player, and keeps a pause the user issued meanwhile. A claim that took over an
+    output undoes that takeover when it is released without a start.
+    """
+
+    def __init__(self, player: WebKioskPlayer, *, took_over: bool) -> None:
+        """
+        Record the player's playback and its user's last command.
+
+        :param player: The kiosk player the playback starts on.
+        :param took_over: Whether the player took over the playback of its output.
+        """
+        self._player = player
+        self._generation = player.playback_generation
+        self._commands = player._command_count
+        self._paused = player._attr_playback_state == PlaybackState.PAUSED
+        self._took_over = took_over
+        self._started = False
+
+    @property
+    def owns_player(self) -> bool:
+        """Return whether no stop, newer playback or new player instance replaced this one."""
+        player = self._player
+        return (
+            self._generation == player.playback_generation
+            and player.mass.players.get_player(player.player_id) is player
+        )
+
+    async def start(self, begin: Callable[[], Awaitable[object]]) -> bool:
+        """
+        Start playback with begin() if the claim still owns the player.
+
+        After the start, a pause, play or stop the user issued since the claim was
+        taken wins; without one, a player paused at that moment is paused again.
+
+        :param begin: Starts the stream, such as a queue resume or seek.
+        :return: Whether playback started.
+        """
+        if not self.owns_player:
+            return False
+        await begin()
+        self._started = True
+        if self._wants_pause():
+            await self._player.pause()
+        return True
+
+    def release(self) -> None:
+        """Undo a takeover that started no playback; call it on every exit."""
+        if self._took_over and not self._started and self.owns_player:
+            self._player._drop_takeover()
+
+    def _wants_pause(self) -> bool:
+        """Return whether the user's last command leaves the started playback paused."""
+        player = self._player
+        if player._command_count != self._commands:
+            paused = player._commanded_state == PlaybackState.PAUSED
+        else:
+            paused = self._paused
+        return paused and player._attr_playback_state != PlaybackState.IDLE

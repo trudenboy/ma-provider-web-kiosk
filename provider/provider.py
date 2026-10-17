@@ -41,7 +41,7 @@ from .constants import (
 from .http_server import WebKioskHTTPServer
 from .lyrics import parse_track_lyrics
 from .ownership import SendspinIdentityConflictError, VerifiedSendspinClaim
-from .player import END_MARGIN, WebKioskPlayer, playback_lock, resume_position
+from .player import END_MARGIN, PlaybackClaim, WebKioskPlayer, playback_lock, resume_position
 from .sendspin_bridge import WebKioskSendspinBridgeManager
 
 if TYPE_CHECKING:
@@ -382,15 +382,12 @@ class WebKioskProvider(PlayerProvider):
                 # Assistant: the leader keeps playing and nothing is carried over.
                 protocol = self.mass.players.get_player(client_id)
                 follower = bool(protocol and protocol.synced_to and protocol.synced_to != client_id)
-                claim = player.sendspin_claim
-                resume = was_playing and not follower
+                identity = player.sendspin_claim
                 player.sendspin_fallback = True
-                if resume:
-                    # Commands issued during the teardown now reach the kiosk
-                    # itself: a pause (a stop on a Sendspin output) or a stop is
-                    # then seen below instead of being undone by the resume.
-                    player.take_over_output()
-                generation = player.playback_generation
+                # Commands issued during the teardown now reach the kiosk itself:
+                # a pause (a stop on a Sendspin output) or a stop is then kept
+                # instead of being undone by the resume.
+                claim = player.claim(take_over=True) if was_playing and not follower else None
                 try:
                     # Controller commands resolve protocol IDs back to their native
                     # parent, which would release a captured static group. Detach only
@@ -410,30 +407,26 @@ class WebKioskProvider(PlayerProvider):
                     player.set_active_output_protocol("native")
                 except BaseException as err:
                     player.sendspin_fallback = False
-                    if resume:
-                        await self._hand_back_output(player, client_id, generation, err)
+                    if claim is not None:
+                        await self._hand_back_output(player, client_id, claim, err)
                     raise
             # Stream preparation can take time. Release the registration lock while
             # resuming, and do not clear a newer connection's state on failure.
-            if not resume:
+            if claim is None:
                 return
-            if player.sendspin_claim is not claim:
-                player.abandon_takeover(generation)
-                return
-            if not player.still_plays(generation):
-                return
-            # A pause during the teardown or the resume is kept: the queue
-            # resumes paused. The user's last command wins.
-            mark = player.transport_mark()
             try:
-                await self._resume_inside_track(queue)
-                if player.wants_pause(mark):
-                    await player.pause()
+                # A newer verified connection owns the output choice now.
+                if player.sendspin_claim is not identity:
+                    return
+                # A pause during the teardown or the resume is kept: the queue
+                # resumes paused. The user's last command wins.
+                await claim.start(lambda: self._resume_inside_track(queue))
             except BaseException:
-                player.abandon_takeover(generation)
-                if player.sendspin_claim is claim:
+                if player.sendspin_claim is identity:
                     player.sendspin_fallback = False
                 raise
+            finally:
+                claim.release()
 
     async def run_owned[T](self, coro: Coroutine[Any, Any, T]) -> T:
         """
@@ -693,13 +686,11 @@ class WebKioskProvider(PlayerProvider):
         await player.stop()
 
     async def _hand_back_output(
-        self, player: WebKioskPlayer, client_id: str, generation: str, err: BaseException
+        self, player: WebKioskPlayer, client_id: str, claim: PlaybackClaim, err: BaseException
     ) -> None:
         """Return playback commands to the Sendspin output after a failed fallback teardown."""
-        commanded = (
-            not player.still_plays(generation) or player.playback_state == PlaybackState.PAUSED
-        )
-        player.abandon_takeover(generation)
+        commanded = not claim.owns_player or player.playback_state == PlaybackState.PAUSED
+        claim.release()
         player.set_active_output_protocol(client_id)
         # A pause or stop reached the kiosk during the teardown, while the
         # Sendspin output kept playing. That output has no pause, so stop it as

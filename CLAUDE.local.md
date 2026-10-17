@@ -87,7 +87,7 @@ of use over keeping a copy.
 | clock: `elapsed_time`, `_track_started_at`, `_accepted_position` | browser position reports (seconds into the served stream; for a flow stream, the whole queue) | the page is not playing HTML5 (Sendspin mode), a report from an older stream | generation check; holds after 10 s without browser evidence and never passes a single stream's audio; the queue maps a flow position to its current item (spec 0008, 0009) |
 | `serves_flow` | `streams.resolve_stream_url()` | the next `play_media()` | resolved on every `play_media()` |
 | `_playback_speed` | queue item `playback_speed` | the item changes | set on every `play_media()` |
-| `current_media`, state and clock taken over from the output (`take_over_output()`) | the Sendspin output's state | the HTML5 stream starts, or the fallback ends without one | replaced by `play_media()` of the fallback's resume; every other exit calls `abandon_takeover()` (IDLE) or, after a failed teardown, hands the output back to Sendspin and stops it when a pause or stop arrived meanwhile |
+| `current_media`, state and clock taken over from the output (`claim(take_over=True)`) | the Sendspin output's state | the HTML5 stream starts, or the fallback ends without one | replaced by `play_media()` of the fallback's resume; every other exit releases the claim (IDLE) or, after a failed teardown, hands the output back to Sendspin and stops it when a pause or stop arrived meanwhile |
 | `sendspin_fallback`, `html5_requested`, active output | MA output selection | a new verified Sendspin connection, a tab change | bridge/output rules; core API tracked in #44 |
 | `_media_signatures`, `_group_signatures`, `_player_names`, `_flow_items` | MA player state | any state update | de-duplication caches only, never decisions |
 
@@ -115,32 +115,39 @@ queue item converted to player media without loading it through the queue.
 Kiosk work that awaits and then starts playback (the resume after a Sendspin
 fallback, the stream rebuilt for a reconnecting page) competes with the user's
 commands. Holding the playback lock does not order them: queue pause takes
-no lock, and an announcement must not be blocked. So:
+no lock, and an announcement must not be blocked.
 
-- **Commands reach the kiosk during the wait.** A flow that moves playback to
-  the kiosk calls `take_over_output()` before its first await. From then on a
-  pause or stop is handled by the kiosk itself, not by the output being torn
-  down. On a Sendspin output, which has no pause, the core would turn a pause
-  into a stop.
-- **Re-check after the await.** Capture `playback_generation` before the
-  await and start playback only if `still_plays(generation)` is true. A stop
-  or a newer play changes the generation; an unregistered or replaced player
-  is no longer the registered instance. If the check fails, return without
-  playing or stopping anything: someone else owns the player now.
-- **Keep the user's last command.** Take `transport_mark()` before the wait.
-  Once playback has started, call `wants_pause(mark)` and pause if it says so.
-  A pause, play or stop issued since the mark wins; without one, the pause
-  state at the mark does. Starting playback (`play_media()`, a queue
-  seek/resume) sets PLAYING, so a pause that landed during preparation would
-  otherwise be lost. The page then holds the new stream, and a later play
-  resumes it.
-- **Never leave taken-over state behind.** Every exit after
-  `take_over_output()` that does not start a stream undoes it.
+Such work takes a playback claim before its first await and starts playback
+only through it:
 
-`tests/standalone/test_commit_after_await.py` checks both rules in an async
-function. A playback start after an await must follow a `still_plays()` call
-that comes after that await. A playback start or seek after an await must be
-followed by a `wants_pause()` call.
+```python
+claim = player.claim(take_over=True)  # take_over only when moving off an output
+try:
+    ...  # awaits
+    await claim.start(lambda: queues.resume(queue_id))
+finally:
+    claim.release()
+```
+
+`PlaybackClaim` (`player.py`) owns the rules:
+
+- **Commands reach the kiosk during the wait.** `take_over=True` continues the
+  output's playback as the kiosk's own before the first await, so a pause or
+  stop is handled by the kiosk instead of the output being torn down (a
+  Sendspin output has no pause; the core would turn it into a stop).
+- **Ownership is re-checked.** `start()` begins only while no stop, newer play
+  or new player instance replaced the claimed playback; otherwise it returns
+  False without playing or stopping anything.
+- **The user's last command is kept.** After the start, a pause, play or stop
+  issued since the claim wins; without one, a player paused at the claim is
+  paused again. Starting a stream sets PLAYING, so a pause that landed during
+  preparation would otherwise be lost.
+- **No taken-over state is left behind.** `release()` drops a takeover that
+  started no stream (IDLE).
+
+`tests/standalone/test_commit_after_await.py` fails a playback start (`play_media`,
+`play_index`, `resume`, `cmd_seek`, ...) awaited directly after an earlier await,
+and a `claim()` without a `release()` in a `finally` block.
 
 ## Resume positions
 
@@ -167,7 +174,7 @@ and `pr-review-toolkit:code-reviewer` to check it):
 - An announcement holding the playback lock.
 - Failure of every new task: who sees it, and what recovers?
 - Lock order and the owner of every new task.
-- Does new code start playback after an await? Capture the generation and a `transport_mark()`, re-check `still_plays()`, then apply `wants_pause()` (see *Playback started after an await*).
+- Does new code start playback after an await? Take a `claim()` before the first await, start through `claim.start()`, release it in `finally` (see *Playback started after an await*).
 - Does new code use something it loaded or looked up before an await (a queue item, a player)? Check it again after the await.
 - Does new code decide which queue item plays next? Leave it to the flow stream (see *Core flows*).
 - Does new code start a stream at a position? Compute it with `resume_position()` and test it at the track boundary.

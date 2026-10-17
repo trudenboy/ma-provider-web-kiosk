@@ -1332,7 +1332,8 @@ async def test_closing_the_page_does_not_interrupt_its_stream_rebuild(
         await release.wait()
 
     mass_mock.players.cmd_seek = AsyncMock(side_effect=seek)
-    mass_mock.players.cmd_pause = AsyncMock()
+    pause = AsyncMock(side_effect=registered.pause)
+    registered.pause = pause  # type: ignore[method-assign]
     ws = await http_client.ws_connect("/ws?device_id=rebuild")
     await ws.receive_json()
     await asyncio.wait_for(seeking.wait(), 1)
@@ -1340,5 +1341,6 @@ async def test_closing_the_page_does_not_interrupt_its_stream_rebuild(
     await asyncio.sleep(0.05)
     release.set()
     async with asyncio.timeout(1):
-        while not mass_mock.players.cmd_pause.await_count:
+        while not pause.await_count:
             await asyncio.sleep(0.01)
+    assert registered.playback_state == PlaybackState.PAUSED
