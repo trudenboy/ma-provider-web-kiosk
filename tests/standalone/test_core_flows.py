@@ -49,3 +49,47 @@ def test_guard_detects_a_conversion_without_loading(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert _converts_without_loading(sample) == [(2, "bare")]
+
+
+ORDER_READ = "items"
+WALK = "_queue_walk"
+
+
+def _order_reads_outside_walk(path: Path) -> list[tuple[int, str]]:
+    """Return (line, function) for every read of the queue order outside the walk builder."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found: list[tuple[int, str]] = []
+    for function in ast.walk(tree):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if function.name == WALK:
+            continue
+        for node in ast.walk(function):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == ORDER_READ
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "player_queues"
+            ):
+                found.append((node.lineno, function.name))
+    return sorted(found)
+
+
+@pytest.mark.parametrize("path", sorted(PROVIDER_DIR.glob("*.py")), ids=lambda path: path.name)
+def test_queue_order_is_read_with_its_repeat_mode(path: Path) -> None:
+    """Which item follows another depends on the repeat mode, so order is never read alone."""
+    assert _order_reads_outside_walk(path) == []
+
+
+def test_guard_detects_a_bare_order_read(tmp_path: Path) -> None:
+    """The guard reports an order read outside the walk builder and accepts one inside it."""
+    sample = tmp_path / "sample.py"
+    sample.write_text(
+        "def bare(self, queue_id):\n"
+        "    return self.mass.player_queues.items(queue_id)\n\n"
+        "def _queue_walk(self, queue_id):\n"
+        "    return self.mass.player_queues.items(queue_id)\n",
+        encoding="utf-8",
+    )
+    assert _order_reads_outside_walk(sample) == [(2, "bare")]

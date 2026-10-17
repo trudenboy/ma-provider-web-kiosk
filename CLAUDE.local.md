@@ -80,7 +80,7 @@ of use over keeping a copy.
 
 | Copy | Source of truth | Goes stale when | Validated |
 |------|-----------------|-----------------|-----------|
-| `_enqueued_media` | queue controller's next item | an item is deleted, the queue cleared, repeat or shuffle changes without a new next item | at use: `get_next_item()` from the finished item; a stale or missing copy is replaced by the item `load_next_queue_item()` prepares; the queue order from the finished item to the loaded one is compared before and after loading, and the item is loaded anew if an edit removed or reordered anything in between |
+| `_enqueued_media` | queue controller's next item | an item is deleted, the queue cleared, repeat or shuffle changes without a new next item | at use: `get_next_item()` from the finished item; a stale or missing copy is replaced by the item `load_next_queue_item()` prepares; the repeat mode and the queue walk from the finished item to the loaded one (wrapping past the end, as Repeat All does) are compared before and after loading, and the item is loaded anew if an edit or a repeat change touched them |
 | `_playback_generation` | the kiosk itself | — (identity of one play) | every browser report must carry it |
 | clock: `elapsed_time`, `_track_started_at`, `_accepted_position` | browser position reports | the page is not playing HTML5 (Sendspin mode), a report from an older stream | generation check; holds after 10 s without browser evidence and never passes the served audio; a fallback resumes inside the track (spec 0008) |
 | `_playback_speed` | queue item `playback_speed` | the item changes | set on every `play_media()` |
@@ -104,6 +104,14 @@ positions, playback speed, skipping unplayable items, session checks).
 
 `tests/standalone/test_core_flows.py` checks the first row: a function that
 converts a queue item to player media must load it through the queue first.
+
+Which item follows another depends on the queue's repeat mode as much as on
+its order: Repeat One follows an item with itself, Repeat All follows the last
+item with the first. The kiosk reads the order only through `_queue_walk()`,
+which returns it together with the repeat mode (`QueueWalk`), and
+`QueueWalk.span()` walks the queue the way the loader does. The same test
+file fails a queue order read anywhere else. Tests of queue order cover
+Repeat Off, One and All.
 
 ## Playback started after an await
 
@@ -154,6 +162,7 @@ and `pr-review-toolkit:code-reviewer` to check it):
 - Lock order and the owner of every new task.
 - Does new code start playback after an await? Capture the generation and a `transport_mark()`, re-check `still_plays()`, then apply `wants_pause()` (see *Playback started after an await*).
 - Does new code use something it loaded or looked up before an await (a queue item, a player)? Check it again after the await.
+- Does new code reason about which queue item follows another? Use `QueueWalk` and test Repeat Off, One and All.
 - Does the new code repeat a step the core does? Call the core API for the whole step (see *Core flows*).
 
 ## Gotchas
