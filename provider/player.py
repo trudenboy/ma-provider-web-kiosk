@@ -409,9 +409,11 @@ class WebKioskPlayer(Player):
             # item or move another one in front of it. The loaded item still
             # follows the finished one as the loader chose it (skipping
             # unplayable items) only if the queue between them is unchanged.
-            span = _queue_span(order, current.queue_item_id, loaded.queue_item_id)
+            if (loaded_id := loaded.queue_item_id) is None:
+                break
+            span = _queue_span(order, current.queue_item_id, loaded_id)
             if span is not None and span == _queue_span(
-                self._queue_order(queue_id), current.queue_item_id, loaded.queue_item_id
+                self._queue_order(queue_id), current.queue_item_id, loaded_id
             ):
                 break
             self.logger.debug("Queue changed while item %s loaded", loaded.queue_item_id)
