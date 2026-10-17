@@ -1087,6 +1087,18 @@ test('every page seek goes through the one clamped seek function', () => {
     assert.match(source, /function seekToSong\(seconds\) \{[\s\S]*?players\/cmd\/seek/);
 });
 
+test('a stopped kiosk shows 0:00, not where its stream ended', async () => {
+    const result = await startKiosk('?sendspin=0&controls=1', [], undefined, {}, {playAllowed:()=>true});
+    const message = data => result.socketInstances[0].onmessage({data:JSON.stringify(data)});
+    message({type:'welcome',player_id:'wk-stop'});
+    message({type:'play',path:'/flow',title:'Song',duration:25,start:-75,playback_speed:1,wave_seq:1,playback_generation:'g'});
+    const audio = result.audioInstances[0];
+    audio.currentTime = 100;
+    message({type:'stop'});
+    audio.ontimeupdate();
+    assert.equal(result.elements.get('kiosk-time').textContent,'0:00');
+});
+
 test('kiosk proves its SDK identity before receiving registration welcome', async () => {
     const result = await startKiosk('');
     const socket = result.socketInstances[0];
