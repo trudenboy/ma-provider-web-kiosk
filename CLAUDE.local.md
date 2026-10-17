@@ -80,7 +80,7 @@ of use over keeping a copy.
 
 | Copy | Source of truth | Goes stale when | Validated |
 |------|-----------------|-----------------|-----------|
-| `_enqueued_media` | queue controller's next item | an item is deleted, the queue cleared, repeat or shuffle changes without a new next item | at use: `get_next_item()` from the finished item; a stale or missing copy is replaced by the item `load_next_queue_item()` prepares; that item is checked again with `get_item()` after loading and loaded anew if a queue edit removed it |
+| `_enqueued_media` | queue controller's next item | an item is deleted, the queue cleared, repeat or shuffle changes without a new next item | at use: `get_next_item()` from the finished item; a stale or missing copy is replaced by the item `load_next_queue_item()` prepares; the queue order from the finished item to the loaded one is compared before and after loading, and the item is loaded anew if an edit removed or reordered anything in between |
 | `_playback_generation` | the kiosk itself | — (identity of one play) | every browser report must carry it |
 | clock: `elapsed_time`, `_track_started_at`, `_accepted_position` | browser position reports | the page is not playing HTML5 (Sendspin mode), a report from an older stream | generation check; holds after 10 s without browser evidence and never passes the served audio; a fallback resumes inside the track (spec 0008) |
 | `_playback_speed` | queue item `playback_speed` | the item changes | set on every `play_media()` |
