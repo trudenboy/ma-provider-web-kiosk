@@ -1068,6 +1068,25 @@ test('the song clock never passes the song duration', async () => {
     assert.equal(result.elements.get('kiosk-time').textContent,'3:20');
 });
 
+test('seeks at the end of a song leave the end margin the server names', async () => {
+    const result = await startKiosk('?sendspin=0&controls=1&token=test-token', [], undefined, {}, {playAllowed:()=>true});
+    const message = data => result.socketInstances[0].onmessage({data:JSON.stringify(data)});
+    message({type:'welcome',player_id:'wk-end',end_margin:3});
+    message({type:'play',path:'/flow',title:'Song',duration:200.6,start:0,playback_speed:1,wave_seq:1,playback_generation:'g'});
+    const seeks = () => result.apiCalls.filter(call => call.command === 'players/cmd/seek').map(call => call.args.position);
+    result.elements.get('kiosk-seek').onchange({target:{value:'1000', style:{setProperty(){}}}});
+    result.audioInstances[0].currentTime = 195;
+    for (const callback of result.documentEvents.get('keydown')) callback({key:'ArrowRight', target:{tagName:'BODY'}, preventDefault(){}});
+    result.elements.get('kiosk-seek').onchange({target:{value:'500', style:{setProperty(){}}}});
+    assert.deepEqual(seeks(), [197, 197, 100]);
+});
+
+test('every page seek goes through the one clamped seek function', () => {
+    const calls = source.match(/players\/cmd\/seek/g) || [];
+    assert.equal(calls.length, 1);
+    assert.match(source, /function seekToSong\(seconds\) \{[\s\S]*?players\/cmd\/seek/);
+});
+
 test('kiosk proves its SDK identity before receiving registration welcome', async () => {
     const result = await startKiosk('');
     const socket = result.socketInstances[0];

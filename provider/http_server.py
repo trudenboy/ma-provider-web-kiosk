@@ -34,7 +34,7 @@ from .ownership import (
     VerifiedSendspinClaim,
 )
 from .party import PartyAdapter
-from .player import WebKioskPlayer, media_timeline
+from .player import END_MARGIN, WebKioskPlayer, media_timeline
 
 if TYPE_CHECKING:
     from music_assistant.models.player import Player, PlayerMedia
@@ -720,6 +720,9 @@ small {{ color: #9a9aa6; display: block; margin-top: 4px; }}
                     "player_id": player_id,
                     "custom_name": custom_name,
                     "server_version": self.provider.mass.version,
+                    # Seconds a seek leaves before the end of a song; the
+                    # same rule as the kiosk's own resumes.
+                    "end_margin": END_MARGIN,
                     "device_info": {
                         "model": player.device_info.model,
                         "manufacturer": player.device_info.manufacturer,

@@ -159,6 +159,11 @@ the page's end report looks premature. Every position passed to `cmd_seek()`,
 `END_MARGIN` seconds to play. `tests/standalone/test_resume_positions.py`
 fails any other position.
 
+The page seeks through Music Assistant's API itself (slider, arrow keys). It
+receives `END_MARGIN` as `end_margin` in the welcome message and applies it in
+`seekToSong()`, the only place that sends `players/cmd/seek`; a page test fails
+a second one.
+
 ## Review checklist
 
 Run before opening a PR (and ask `pr-review-toolkit:silent-failure-hunter`

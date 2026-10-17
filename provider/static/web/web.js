@@ -332,6 +332,7 @@
                 }).catch(function () { if (ws !== socket) return; useHtml5(); if (ws) ws.close(); });
                 break;
             case 'welcome':
+                if (typeof msg.end_margin === 'number' && msg.end_margin >= 0) endMargin = msg.end_margin;
                 if (msg.device_info && typeof msg.device_info.model === 'string') browserModel = msg.device_info.model;
                 playerId = msg.player_id;
                 customName = typeof msg.custom_name === 'string' ? msg.custom_name : '';
@@ -1079,9 +1080,12 @@
         });
     }
 
+    var endMargin = 2;
     function seekToSong(seconds) {
         var dur = vizDuration();
-        var t = Math.max(0, dur ? Math.min(dur, seconds) : seconds);
+        // A stream that starts at the very end of a song is empty; leave its
+        // last seconds to play, as the server's own resumes do.
+        var t = Math.max(0, Math.floor(dur ? Math.min(seconds, Math.floor(dur) - endMargin) : seconds));
         displayHold = t;
         // Keep the energy window on the seek target while Sendspin has no
         // audio element to read the position from. Ignore a stale queue poll
@@ -1101,7 +1105,7 @@
         paintLyrics();
         // The queue rebuilds the stream. Do not move audio.currentTime to the
         // song position: that file starts at the seek point.
-        cmd('players/cmd/seek', { position: Math.round(t) }).catch(function () {
+        cmd('players/cmd/seek', { position: t }).catch(function () {
             displayHold = null;
             paintClock();
         });

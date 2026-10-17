@@ -24,7 +24,7 @@ from music_assistant.controllers.webserver.helpers.auth_providers import AuthFai
 from music_assistant.helpers.api import APICommandHandler
 from music_assistant.providers.web_kiosk.http_server import WebKioskHTTPServer
 from music_assistant.providers.web_kiosk.ownership import VerifiedSendspinClaim
-from music_assistant.providers.web_kiosk.player import WebKioskPlayer
+from music_assistant.providers.web_kiosk.player import END_MARGIN, WebKioskPlayer
 from music_assistant.providers.web_kiosk.provider import WebKioskProvider
 
 
@@ -239,6 +239,14 @@ async def test_ws_welcome_carries_server_version(
     ws = await http_client.ws_connect("/ws?device_id=version-test")
     payload = json.loads((await ws.receive()).data)
     assert payload["server_version"] == "2.17.0.dev42"
+    await ws.close()
+
+
+async def test_ws_welcome_carries_the_end_margin(http_client: TestClient[Any, Any]) -> None:
+    """Page seeks leave the same last seconds of a track as the server's own resumes."""
+    ws = await http_client.ws_connect("/ws?device_id=margin-test")
+    payload = json.loads((await ws.receive()).data)
+    assert payload["end_margin"] == END_MARGIN
     await ws.close()
 
 
