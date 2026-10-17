@@ -145,6 +145,16 @@ function. A playback start after an await must follow a `still_plays()` call
 that comes after that await. A playback start or seek after an await must be
 followed by a `wants_pause()` call.
 
+## Resume positions
+
+A stream the kiosk starts at a position (the reconnect seek, the Sendspin
+fallback resuming inside a track) must not start at the very end of the
+track. That stream is empty, the queue controller drops its seek offset, and
+the page's end report looks premature. Every position passed to `cmd_seek()`,
+`seek()` or `play_index()` comes from `resume_position()`, which leaves
+`END_MARGIN` seconds to play. `tests/standalone/test_resume_positions.py`
+fails any other position.
+
 ## Review checklist
 
 Run before opening a PR (and ask `pr-review-toolkit:silent-failure-hunter`
@@ -163,6 +173,7 @@ and `pr-review-toolkit:code-reviewer` to check it):
 - Does new code start playback after an await? Capture the generation and a `transport_mark()`, re-check `still_plays()`, then apply `wants_pause()` (see *Playback started after an await*).
 - Does new code use something it loaded or looked up before an await (a queue item, a player)? Check it again after the await.
 - Does new code reason about which queue item follows another? Use `QueueWalk` and test Repeat Off, One and All.
+- Does new code start a stream at a position? Compute it with `resume_position()` and test it at the track boundary.
 - Does the new code repeat a step the core does? Call the core API for the whole step (see *Core flows*).
 
 ## Gotchas
