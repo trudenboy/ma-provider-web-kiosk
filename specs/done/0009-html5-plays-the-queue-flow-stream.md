@@ -2,7 +2,7 @@
 id: "0009"
 title: "HTML5 kiosk plays the queue's flow stream"
 size: L
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 120
 ---
