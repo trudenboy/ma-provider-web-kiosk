@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Coroutine
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, PropertyMock, patch
 
 import pytest
@@ -122,12 +122,7 @@ async def test_flow_track_change_publishes_media_with_its_stream_start(
     provider: WebKioskProvider, mass_mock: Mock, player: WebKioskPlayer
 ) -> None:
     """Each new queue item reaches the pages once, with where its song starts in the stream."""
-    server = WebKioskHTTPServer(provider, 0)
-    server._ws_clients[player.player_id] = {Mock(closed=False)}
-    server._post = Mock()  # type: ignore[method-assign]
-    provider.http_server = server
-    provider.spawn_wave = Mock()  # type: ignore[method-assign]
-    provider.spawn_lyrics = Mock()  # type: ignore[method-assign]
+    server, post, _send, wave = _pages(provider, player, Mock(closed=False))
     mass_mock.players.get_player.return_value = player
     await player.play_media(_queue_media())
     first = _queue_media()
@@ -141,7 +136,7 @@ async def test_flow_track_change_publishes_media_with_its_stream_start(
     )
 
     def messages() -> list[dict[str, object]]:
-        return [json.loads(call.args[1]) for call in server._post.call_args_list]
+        return _sent(post)
 
     def media_messages() -> list[dict[str, object]]:
         return [message for message in messages() if message["type"] == "media"]
@@ -171,21 +166,24 @@ async def test_flow_track_change_publishes_media_with_its_stream_start(
         assert media[0]["start"] == pytest.approx(12 - 200, abs=0.5)
         assert media[0]["playback_speed"] == 1.0
         assert media[0]["wave_seq"] == 2
-        provider.spawn_wave.assert_called_with(player.player_id, 2)
+        wave.assert_called_with(player.player_id, 2)
     finally:
         patcher.stop()
 
 
-def _pages(provider: WebKioskProvider, player: WebKioskPlayer, *pages: Mock) -> WebKioskHTTPServer:
-    """Return a page server with the given pages connected to the player."""
+def _pages(
+    provider: WebKioskProvider, player: WebKioskPlayer, *pages: Mock
+) -> tuple[WebKioskHTTPServer, Mock, AsyncMock, Mock]:
+    """Return a page server with the given pages, and its post, send and curve mocks."""
     server = WebKioskHTTPServer(provider, 0)
     server._ws_clients[player.player_id] = set(pages)
-    server._post = Mock()  # type: ignore[method-assign]
-    server._ws_send = AsyncMock()  # type: ignore[method-assign]
+    post, send, wave = Mock(), AsyncMock(), Mock()
+    server._post = post  # type: ignore[method-assign]
+    server._ws_send = send  # type: ignore[method-assign]
     provider.http_server = server
-    provider.spawn_wave = Mock()  # type: ignore[method-assign]
+    provider.spawn_wave = wave  # type: ignore[method-assign]
     provider.spawn_lyrics = Mock()  # type: ignore[method-assign]
-    return server
+    return server, post, send, wave
 
 
 def _sent(mock: Mock | AsyncMock) -> list[dict[str, object]]:
@@ -198,7 +196,7 @@ async def test_play_media_announces_its_first_item_once(
     provider: WebKioskProvider, mass_mock: Mock, player: WebKioskPlayer
 ) -> None:
     """State updates inside play_media do not announce the item the play message carries."""
-    server = _pages(provider, player, Mock(closed=False))
+    server, post, _send, wave = _pages(provider, player, Mock(closed=False))
     mass_mock.players.get_player.return_value = player
     first = _queue_media()
     state = Mock(
@@ -209,15 +207,15 @@ async def test_play_media_announces_its_first_item_once(
         group_members=[],
     )
     # Music Assistant runs state subscribers synchronously inside update_state().
-    player.update_state = Mock(  # type: ignore[method-assign]
+    cast("Any", player).update_state = Mock(
         side_effect=lambda: server._on_player_state_updated(player, {})
     )
     with patch.object(WebKioskPlayer, "state", new_callable=PropertyMock, return_value=state):
         await player.play_media(first)
 
-    stream = [m["type"] for m in _sent(server._post) if m["type"] in ("play", "media")]
+    stream = [m["type"] for m in _sent(post) if m["type"] in ("play", "media")]
     assert stream == ["play"]
-    provider.spawn_wave.assert_called_once()
+    wave.assert_called_once()
 
 
 @pytest.mark.usefixtures("flow")
@@ -226,7 +224,7 @@ async def test_page_that_received_the_current_stream_is_not_rebuilt(
 ) -> None:
     """A stream started after the page connected reached it; the snapshot does not restart it."""
     page = Mock(closed=False)
-    server = _pages(provider, player, page)
+    server, _post, send, _wave = _pages(provider, player, page)
     mass_mock.players.get_player.return_value = player
     mass_mock.player_queues.get.return_value = Mock(
         current_item=Mock(duration=180), corrected_elapsed_time=0.2
@@ -237,7 +235,7 @@ async def test_page_that_received_the_current_stream_is_not_rebuilt(
     await server._send_snapshot(page, player)
 
     mass_mock.players.cmd_seek.assert_not_awaited()
-    assert "play" not in [message["type"] for message in _sent(server._ws_send)]
+    assert "play" not in [message["type"] for message in _sent(send)]
 
 
 @pytest.mark.usefixtures("flow")
@@ -245,7 +243,7 @@ async def test_flow_snapshot_without_a_rebuild_sends_no_stream_seek(
     provider: WebKioskProvider, mass_mock: Mock, player: WebKioskPlayer
 ) -> None:
     """A flow stream cannot be entered at a stream position, so none is sent."""
-    server = _pages(provider, player)
+    server, _post, send, _wave = _pages(provider, player)
     await player.play_media(_queue_media())
     player._track_started_at = time.monotonic() - 400
     player.update_position(390)
@@ -256,8 +254,8 @@ async def test_flow_snapshot_without_a_rebuild_sends_no_stream_seek(
 
     await server._send_snapshot(Mock(closed=False), player)
 
-    assert [message["type"] for message in _sent(server._ws_send)][:1] == ["play"]
-    assert "seek" not in [message["type"] for message in _sent(server._ws_send)]
+    assert [message["type"] for message in _sent(send)][:1] == ["play"]
+    assert "seek" not in [message["type"] for message in _sent(send)]
 
 
 @pytest.mark.usefixtures("flow")
@@ -266,7 +264,7 @@ async def test_page_leaving_a_shared_flow_rebuilds_it_for_the_others(
 ) -> None:
     """The queue follows one page's copy of the stream; when a page leaves, the rest get a new one."""
     leaving, staying = Mock(closed=False), Mock(closed=False)
-    server = _pages(provider, player, leaving, staying)
+    server, post, _send, _wave = _pages(provider, player, leaving, staying)
     mass_mock.players.get_player.return_value = player
     mass_mock.player_queues.get.return_value = Mock(
         current_item=Mock(duration=180), corrected_elapsed_time=42.3
@@ -282,11 +280,11 @@ async def test_page_leaving_a_shared_flow_rebuilds_it_for_the_others(
         await player.play_media(_queue_media("item-2"))
 
     mass_mock.players.cmd_seek = AsyncMock(side_effect=seek)
-    server._post.reset_mock()
+    post.reset_mock()
 
     await server._close_socket(player.player_id, leaving)
 
     mass_mock.players.cmd_seek.assert_awaited_once_with(player.player_id, 42)
-    recipients = {call.args[0] for call in server._post.call_args_list}
+    recipients = {call.args[0] for call in post.call_args_list}
     assert recipients == {staying}
-    assert _sent(server._post)[0]["playback_generation"] == player.playback_generation
+    assert _sent(post)[0]["playback_generation"] == player.playback_generation

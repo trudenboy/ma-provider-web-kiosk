@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 
 from music_assistant_models.enums import PlaybackState
@@ -86,7 +87,7 @@ async def test_released_takeover_without_a_start_goes_idle(
 ) -> None:
     """Playback taken over from an output is dropped when no stream replaced it."""
     mass_mock.players.get_player.return_value = player
-    player.set_active_output_protocol = Mock()  # type: ignore[method-assign]
+    cast("Any", player).set_active_output_protocol = Mock()
     claim = player.claim(take_over=True)
 
     claim.release()
@@ -100,7 +101,7 @@ async def test_released_takeover_keeps_the_stream_it_started(
 ) -> None:
     """Releasing after a start leaves the new stream alone."""
     mass_mock.players.get_player.return_value = player
-    player.set_active_output_protocol = Mock()  # type: ignore[method-assign]
+    cast("Any", player).set_active_output_protocol = Mock()
     claim = player.claim(take_over=True)
     await claim.start(lambda: player.play_media(_media()))
 
