@@ -145,10 +145,9 @@ iframe embedding, including embedding in Home Assistant dashboards.
   availability is probed: Opus requires a supported WebCodecs configuration,
   FLAC requires decoding a small sample, and PCM remains the baseline. A separate
   software Opus decoder is not bundled.
-- HTML5 plays individual tracks with flow mode disabled; crossfade and audio
-  overlays are not applied in that mode
-  ([#81](https://github.com/trudenboy/ma-provider-web-kiosk/issues/81)). MP3 is
-  the compatibility default.
+- HTML5 plays the queue as one continuous stream (flow mode), so crossfade and
+  audio overlays apply. The title and lyrics follow a track change within about
+  two seconds. MP3 is the compatibility default.
 - Lyrics and the visualizer depend on available lyrics and stored audio analysis.
   Party QR is shown only while a Party is active.
 

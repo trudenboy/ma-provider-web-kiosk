@@ -1,4 +1,4 @@
-"""Guard: playback started after an await re-checks owner and intent (see CLAUDE.local.md)."""
+"""Guard: playback started after an await goes through a playback claim (see CLAUDE.local.md)."""
 
 from __future__ import annotations
 
@@ -10,11 +10,10 @@ import pytest
 import music_assistant.providers.web_kiosk as provider_package
 
 PROVIDER_DIR = Path(str(provider_package.__file__)).parent
-COMMITS = {"play_media", "play_index", "resume", "_resume_inside_track"}
-CHECK = "still_plays"
-# Starts that also replace a paused stream with a playing one.
-STARTS = COMMITS | {"cmd_seek"}
-INTENT = "wants_pause"
+# Calls that start playback, replacing whatever the player plays or pauses.
+STARTS = {"play_media", "play_index", "resume", "_resume_inside_track", "cmd_seek"}
+CLAIM = "claim"
+RELEASE = "release"
 
 
 def _called(node: ast.AST) -> str | None:
@@ -24,37 +23,8 @@ def _called(node: ast.AST) -> str | None:
     return None
 
 
-def _unchecked_commits(path: Path) -> list[tuple[int, str]]:
-    """Return (line, function) for every playback start after an await without a re-check."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    found: list[tuple[int, str]] = []
-    for function in ast.walk(tree):
-        if not isinstance(function, ast.AsyncFunctionDef):
-            continue
-        nodes = list(ast.walk(function))
-        commits = [
-            node.lineno
-            for node in nodes
-            if isinstance(node, ast.Await) and _called(node.value) in COMMITS
-        ]
-        waits: list[int] = []
-        for node in nodes:
-            if isinstance(node, (ast.AsyncWith, ast.AsyncFor)) or (
-                isinstance(node, ast.Await) and _called(node.value) not in COMMITS
-            ):
-                waits.append(node.lineno)
-        checks = [
-            node.lineno for node in nodes if isinstance(node, ast.Call) and _called(node) == CHECK
-        ]
-        for line in commits:
-            earlier = [wait for wait in waits if wait < line]
-            if earlier and not any(max(earlier) < check < line for check in checks):
-                found.append((line, function.name))
-    return sorted(found)
-
-
-def _starts_ignoring_intent(path: Path) -> list[tuple[int, str]]:
-    """Return (line, function) for every start after an await not followed by an intent check."""
+def _direct_starts_after_an_await(path: Path) -> list[tuple[int, str]]:
+    """Return (line, function) for every playback start awaited after an earlier await."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     found: list[tuple[int, str]] = []
     for function in ast.walk(tree):
@@ -72,61 +42,82 @@ def _starts_ignoring_intent(path: Path) -> list[tuple[int, str]]:
                 isinstance(node, ast.Await) and _called(node.value) not in STARTS
             ):
                 waits.append(node.lineno)
-        intents = [
-            node.lineno for node in nodes if isinstance(node, ast.Call) and _called(node) == INTENT
+        found.extend((line, function.name) for line in starts if any(wait < line for wait in waits))
+    return sorted(found)
+
+
+def _claims_not_released(path: Path) -> list[tuple[int, str]]:
+    """Return (line, function) for every claim taken in a function without a finally release."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found: list[tuple[int, str]] = []
+    for function in ast.walk(tree):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        claims = [
+            node.lineno
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call) and _called(node) == CLAIM
         ]
-        for line in starts:
-            if any(wait < line for wait in waits) and not any(check > line for check in intents):
-                found.append((line, function.name))
+        if not claims:
+            continue
+        released = any(
+            _called(node) == RELEASE
+            for block in ast.walk(function)
+            if isinstance(block, ast.Try)
+            for statement in block.finalbody
+            for node in ast.walk(statement)
+        )
+        if not released:
+            found.extend((line, function.name) for line in claims)
     return sorted(found)
 
 
 @pytest.mark.parametrize("path", sorted(PROVIDER_DIR.glob("*.py")), ids=lambda path: path.name)
-def test_playback_started_after_an_await_keeps_the_last_command(path: Path) -> None:
-    """A pause that lands while playback is prepared must not be overwritten by the start."""
-    assert _starts_ignoring_intent(path) == []
+def test_playback_started_after_an_await_goes_through_a_claim(path: Path) -> None:
+    """A stop, a newer play or a pause during the await must win over the start."""
+    assert _direct_starts_after_an_await(path) == []
 
 
-def test_guard_detects_a_start_that_ignores_a_pause(tmp_path: Path) -> None:
-    """The guard reports a start after an await and accepts one followed by an intent check."""
+def test_guard_detects_a_direct_start_after_an_await(tmp_path: Path) -> None:
+    """The guard reports a start awaited after an await and accepts one through a claim."""
     sample = tmp_path / "sample.py"
     sample.write_text(
         "async def bare(player, load):\n"
         "    media = await load()\n"
         "    await player.play_media(media)\n\n"
-        "async def kept(player, load):\n"
-        "    mark = player.transport_mark()\n"
-        "    media = await load()\n"
-        "    await player.play_media(media)\n"
-        "    if player.wants_pause(mark):\n"
-        "        await player.pause()\n\n"
+        "async def claimed(player, load):\n"
+        "    claim = player.claim()\n"
+        "    try:\n"
+        "        media = await load()\n"
+        "        await claim.start(lambda: player.play_media(media))\n"
+        "    finally:\n"
+        "        claim.release()\n\n"
         "async def direct(player, media):\n"
         "    await player.play_media(media)\n",
         encoding="utf-8",
     )
-    assert _starts_ignoring_intent(sample) == [(3, "bare")]
+    assert _direct_starts_after_an_await(sample) == [(3, "bare")]
 
 
 @pytest.mark.parametrize("path", sorted(PROVIDER_DIR.glob("*.py")), ids=lambda path: path.name)
-def test_playback_started_after_an_await_is_rechecked(path: Path) -> None:
-    """A stop, a newer play or a replaced player during the await must win over the start."""
-    assert _unchecked_commits(path) == []
+def test_every_claim_is_released(path: Path) -> None:
+    """A claim that took over an output must not leave that playback behind on any exit."""
+    assert _claims_not_released(path) == []
 
 
-def test_guard_detects_a_start_without_a_recheck(tmp_path: Path) -> None:
-    """The guard reports a start after an await and accepts one after a re-check."""
+def test_guard_detects_a_claim_without_a_release(tmp_path: Path) -> None:
+    """The guard reports a claim without a finally release and accepts one with it."""
     sample = tmp_path / "sample.py"
     sample.write_text(
-        "async def bare(player, load):\n"
-        "    media = await load()\n"
-        "    await player.play_media(media)\n\n"
-        "async def checked(player, load):\n"
-        "    generation = player.playback_generation\n"
-        "    media = await load()\n"
-        "    if player.still_plays(generation):\n"
-        "        await player.play_media(media)\n\n"
-        "async def direct(player, media):\n"
-        "    await player.play_media(media)\n",
+        "async def leaked(player, begin):\n"
+        "    claim = player.claim(take_over=True)\n"
+        "    await claim.start(begin)\n\n"
+        "async def released(player, begin):\n"
+        "    claim = player.claim(take_over=True)\n"
+        "    try:\n"
+        "        await claim.start(begin)\n"
+        "    finally:\n"
+        "        claim.release()\n",
         encoding="utf-8",
     )
-    assert _unchecked_commits(sample) == [(3, "bare")]
+    assert _claims_not_released(sample) == [(2, "leaked")]
