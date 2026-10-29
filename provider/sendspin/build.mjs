@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const destination = path.resolve(root, '../../provider/static/web/sendspin-js');
+const destination = path.resolve(root, '../static/web/sendspin-js');
 const packages = ['@sendspin/sendspin-js', '@noble/curves', '@noble/hashes', '@noble/ciphers'];
 const files = new Map();
 const versions = {};
@@ -56,6 +56,8 @@ const esbuild = JSON.parse(await readFile(path.join(root, 'node_modules/esbuild/
 files.set('VERSION.txt', `@sendspin/sendspin-js@${versions['@sendspin/sendspin-js']}\n`);
 files.set('BUILD.json', JSON.stringify({
     packages: versions,
+    source: 'sendspin/index.js',
+    build: 'sendspin/build.mjs',
     esbuild: esbuild.version,
     format: 'iife',
     target: ['chrome67', 'safari15', 'firefox68'],

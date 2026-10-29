@@ -50,8 +50,9 @@ closing its last connection removes the player after a five-second grace period.
 - Experimental Sendspin grouping, with HTML5 fallback when Sendspin cannot connect.
 - An interactive URL builder and a copyable base URL in provider settings.
 
-Track metadata and the visualizer, lyrics, and Party QR do not need an MA API
-token. On-page playback controls and the queue display require one. Music
+Track metadata, the visualizer and lyrics do not need an MA API token. The
+Party QR needs the provider setting `enable_party_qr` (off by default) but no
+token. On-page playback controls and the queue display require a token. Music
 selection and library browsing remain in the Music Assistant interface.
 
 ## URL builder and parameters
@@ -115,11 +116,16 @@ not grant the player page access to playback controls: supply its token separate
 | `http_port` | `8098` | Port for the embedded kiosk HTTP server |
 | `show_stop_notification` | `false` | Show an informational notice after playback stops |
 | `enable_sendspin_bridge` | `true` | Enable experimental Sendspin integration |
+| `enable_party_qr` | `false` | Show the Party join QR. The QR contains a guest login; enable it only when the kiosk port is limited to a trusted network |
 | `url_builder_require_auth` | `false` | Require MA sign-in for the builder and player list |
 | `kiosk_url` | read-only | Copyable canonical `/kiosk` URL |
 
 In individual player settings, the HTML5 output codec defaults to **MP3**.
 Choose another codec only if the browser supports it.
+
+The kiosk port has no login: anyone who can reach it can open `/kiosk` and
+register a browser player. Keep it on the local network, do not publish it to the
+internet, and treat a kiosk URL that carries an MA token as a credential.
 
 ## Browser requirements and troubleshooting
 
@@ -149,7 +155,10 @@ iframe embedding, including embedding in Home Assistant dashboards.
   audio overlays apply. The title and lyrics follow a track change within about
   two seconds. MP3 is the compatibility default.
 - Lyrics and the visualizer depend on available lyrics and stored audio analysis.
-  Party QR is shown only while a Party is active.
+  Party QR is shown only while a Party is active and `enable_party_qr` is enabled.
+- The bundled Sendspin client is the latest npm release but still reports as a
+  non-compliant client in MA logs; the Sendspin output's mute state may be
+  unknown. HTML5 remains the fallback if MA stops accepting it.
 
 ## Browser compatibility
 
@@ -190,7 +199,8 @@ provider; [server PR #5868](https://github.com/music-assistant/server/pull/5868)
 removed that functionality from the TV-focused MSX provider.
 
 See [CLAUDE.md](CLAUDE.md) for the provider development workflow. The Sendspin SDK is built
-from locked npm dependencies; see the [browser asset build instructions](scripts/sendspin/README.md).
+from locked npm dependencies; the entry source and build script ship with the provider in
+[provider/sendspin](provider/sendspin/README.md).
 Node is needed only to rebuild assets, not to run the provider.
 
 ```bash

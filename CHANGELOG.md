@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-10-29
+
+### Changed
+
+- The Party guest QR is now opt-in and off by default. The QR contains a guest login and the kiosk port has no authentication, so enable **Show the Party guest QR** only when that port is limited to a trusted network.
+- The Sendspin browser bundle now ships with its entry-point source, build script and locked npm dependencies, so it can be reviewed and rebuilt from the provider tree alone.
+
+### Security
+
+- The kiosk's Music Assistant API proxy now forwards only the commands the player page uses. Other commands, including login, are refused instead of being re-exposed on the kiosk port.
+- The Party caption and QR routes answer nothing until the provider setting enables them.
+
 ## [1.1.0] - 2026-10-17
 
 ### Changed

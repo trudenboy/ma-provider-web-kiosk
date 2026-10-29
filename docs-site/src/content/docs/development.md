@@ -8,9 +8,10 @@ description: Setting up the development environment for Web Kiosk provider
 
 - Python 3.14+
 - [uv](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- ffmpeg 6.1+ (for MA integration tests)
+- ffmpeg 6.1+ (for the local Music Assistant dev server)
   - macOS: `brew install ffmpeg`
   - Ubuntu: `sudo apt-get install ffmpeg`
+- Node 22+ only when rebuilding the bundled Sendspin client
 - Fork of [trudenboy/ma-server](https://github.com/trudenboy/ma-server) (for dev server)
 
 ## Setup
@@ -24,10 +25,7 @@ Re-run after `git pull` — MA model versions may change.
 ## Running Tests
 
 ```bash
-# Unit tests only (no MA server needed)
-uv run pytest tests/ -m "not integration"
-
-# Full test suite
+# Unit tests (no MA server needed)
 uv run pytest tests/
 
 # With coverage report
