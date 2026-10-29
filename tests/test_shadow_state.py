@@ -51,13 +51,12 @@ def _playing_player(media: PlayerMedia) -> Mock:
 
 def test_media_cache_follows_the_players_current_media(
     provider: WebKioskProvider,
-    player: WebKioskPlayer,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A changed track reaches the page, and an unchanged one is de-duplicated."""
     server, posted = _page_server(provider, "wk_test", monkeypatch)
-    provider.spawn_wave = Mock()
-    provider.spawn_lyrics = Mock()
+    monkeypatch.setattr(provider, "spawn_wave", Mock())
+    monkeypatch.setattr(provider, "spawn_lyrics", Mock())
     player = _playing_player(PlayerMedia(uri="track", title="First", duration=30))
 
     server._publish_effective_media(player)
@@ -82,9 +81,10 @@ def test_group_cache_follows_the_group_name(
     group = Mock()
     group.state = Mock(name="Room")
     group.state.name = "Room"
-    mass = provider.mass
-    mass.players.get_player.side_effect = lambda player_id, **_: (
-        group if player_id == "room" else None
+    monkeypatch.setattr(
+        provider.mass.players,
+        "get_player",
+        Mock(side_effect=lambda player_id, **_: group if player_id == "room" else None),
     )
     kiosk = Mock(player_id="wk_test", active_output_protocol=None)
     kiosk.state = Mock(active_group="room", synced_to=None, group_members=[])
@@ -124,8 +124,8 @@ def test_flow_item_follows_the_queue(
 ) -> None:
     """The page hears the new queue item, and does not hear the same item twice."""
     server, posted = _page_server(provider, "wk_test", monkeypatch)
-    provider.spawn_wave = Mock()
-    provider.spawn_lyrics = Mock()
+    monkeypatch.setattr(provider, "spawn_wave", Mock())
+    monkeypatch.setattr(provider, "spawn_lyrics", Mock())
     mass_mock.player_queues.get = Mock(
         return_value=Mock(playback_speed=1.0, corrected_elapsed_time=0.0)
     )
