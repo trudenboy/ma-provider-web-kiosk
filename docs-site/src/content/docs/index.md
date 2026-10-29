@@ -21,18 +21,8 @@ description: Documentation for the Web Kiosk provider for Music Assistant
 
 
 
-[Web Kiosk](https://github.com/trudenboy/ma-provider-web-kiosk) is a player
-provider for Music Assistant. Provider created and maintained by
-[TrudenBoy](https://github.com/TrudenBoy).
-
-:::caution
-The provider is still in upstream review and is not part of a Music Assistant
-release yet. Run the integration build from
-[trudenboy/ma-server](https://github.com/trudenboy/ma-server) until it lands.
-:::
-
-**Development status:** beta. The declared feature set is implemented; remaining
-work is tracked in the project's GitHub issues.
+Music Assistant supports [Web Kiosk](https://github.com/trudenboy/ma-provider-web-kiosk) player.
+Provider created and maintained by [TrudenBoy](https://github.com/TrudenBoy).
 
 
 
