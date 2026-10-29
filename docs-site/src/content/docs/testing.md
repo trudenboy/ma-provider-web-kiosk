@@ -28,7 +28,9 @@ Every push and pull request triggers two parallel jobs via `test.yml`:
 | `lint-*` | Runs ruff, mypy, codespell, pre-commit |
 
 
-Tests run against `trudenboy/ma-server@dev` (plugin-enabled fork — full CI with ruff + mypy).
+Tests import the provider from the `music-assistant` package pinned to
+`music-assistant/server@dev` in `pyproject.toml`, so the suite runs the same
+controllers the provider meets in production.
 
 
 ## Tools
@@ -64,6 +66,18 @@ Linting only:
 ```bash
 uv run ruff check provider/
 uv run ruff format --check provider/
+```
+
+## Sendspin bundle
+
+The browser SDK is generated from the sources in `provider/sendspin/`. Node 22+
+is needed only for that build:
+
+```bash
+cd provider/sendspin
+npm ci
+npm run check   # generated assets match the lockfile
+npm test        # classic-script loading, identity and PCM decoding
 ```
 
 ## Coverage

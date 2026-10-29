@@ -4,6 +4,15 @@ title: Configuration
 
 ## Adding the Provider to Music Assistant
 
+Web Kiosk is not part of a Music Assistant release yet: the upstream provider
+PR ([music-assistant/server#6948](https://github.com/music-assistant/server/pull/6948))
+is still open. Until it lands, run the integration build from
+[trudenboy/ma-server](https://github.com/trudenboy/ma-server) on the
+`integration/dev` branch; that repository's README covers the container and
+dev-server setup.
+
+Once the provider ships with Music Assistant:
+
 1. Open **Music Assistant → Settings → Providers**
 2. Click **Add Provider** and select **Web Kiosk**
 3. Keep the default HTTP port or choose another free port, then click **Save**
@@ -16,11 +25,21 @@ title: Configuration
 | `http_port` | `8098` | Port for the embedded kiosk HTTP server |
 | `show_stop_notification` | `false` | Show an informational notice after playback stops |
 | `enable_sendspin_bridge` | `true` | Enable experimental Sendspin integration |
+| `enable_party_qr` | `false` | Show the Party join QR. The QR contains a guest login; enable it only when the kiosk port is limited to a trusted network |
 | `url_builder_require_auth` | `false` | Require MA sign-in for the builder and player list |
 | `kiosk_url` | read-only | Copyable canonical `/kiosk` URL |
 
 In individual player settings, the HTML5 output codec defaults to **MP3**.
 Choose another codec only if the browser supports it.
+
+## Kiosk port and access
+
+The kiosk port has no login. Anyone who can reach it can open `/kiosk`, register
+a browser player, receive a stream token and control playback when a page is
+given an MA token. Keep the port on the local network, do not publish it to the
+internet, and treat a copied kiosk URL that carries a token as a credential.
+`Require MA sign-in for URL builder` protects only the builder and player list,
+not `/kiosk`.
 
 ## URL builder and parameters
 
@@ -32,7 +51,7 @@ read-only **Kiosk URL** setting also contains the base player URL.
 |-----------|---------|--------|
 | `sendspin` | enabled | Set `sendspin=0` for HTML5 playback |
 | `controls` | off | `controls=1` enables playback controls |
-| `party` | off | `party=1` shows the QR while a Party is active |
+| `party` | off | `party=1` shows the QR while a Party is active and `enable_party_qr` is set |
 | `viz` | off | `viz=1` enables the audio-analysis visualizer |
 | `lyrics` | off | `lyrics=1` enables lyric lines when available |
 | `queue` | off | `queue=1` enables the queue display; requires a token |
