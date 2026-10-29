@@ -1,0 +1,14 @@
+{
+  "name": "web-kiosk-js-tests",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --experimental-vm-modules --test smoke.test.mjs kiosk.test.mjs compatibility.test.mjs"
+  },
+  "devDependencies": {
+    "acorn": "8.15.0"
+  }
+}

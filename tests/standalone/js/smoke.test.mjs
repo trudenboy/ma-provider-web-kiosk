@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createContext, runInContext } from 'node:vm';
 
-const source = await readFile(new URL('../../provider/static/web/sendspin-js/index.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../../../provider/static/web/sendspin-js/index.js', import.meta.url), 'utf8');
 
 async function loadBundle(storage, options = {}) {
     const context = createContext({
@@ -27,7 +27,7 @@ function memoryStorage(entries = []) {
 test('bundle header retains complete licenses and attribution from npm packages', async () => {
     const header = source.split('*/', 1)[0];
     for (const name of ['@sendspin/sendspin-js', '@noble/curves', '@noble/hashes', '@noble/ciphers']) {
-        const directory = new URL(`node_modules/${name}/`, import.meta.url);
+        const directory = new URL(`../../../provider/sendspin/node_modules/${name}/`, import.meta.url);
         const info = JSON.parse(await readFile(new URL('package.json', directory), 'utf8'));
         const license = (await readFile(new URL('LICENSE', directory), 'utf8')).trimEnd();
         assert.ok(header.includes(`${name}@${info.version}`));

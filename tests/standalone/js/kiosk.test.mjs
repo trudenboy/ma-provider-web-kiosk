@@ -4,9 +4,9 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createContext, runInContext } from 'node:vm';
 
-const source = await readFile(new URL('../../provider/static/web/web.js', import.meta.url), 'utf8');
-const sdkSource = await readFile(new URL('../../provider/static/web/sendspin-js/index.js', import.meta.url), 'utf8');
-const html = await readFile(new URL('../../provider/static/web/index.html', import.meta.url), 'utf8');
+const source = await readFile(new URL('../../../provider/static/web/web.js', import.meta.url), 'utf8');
+const sdkSource = await readFile(new URL('../../../provider/static/web/sendspin-js/index.js', import.meta.url), 'utf8');
+const html = await readFile(new URL('../../../provider/static/web/index.html', import.meta.url), 'utf8');
 const elementIds = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]));
 
 test('group Sendspin playback shows SDK metadata without a native kiosk play message', async () => {
@@ -296,7 +296,7 @@ test('a rejected fullscreen request leaves playback controls usable', async () =
 });
 
 test('the URL builder enables the optional fullscreen button without changing default Sendspin', async () => {
-    const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
+    const builder = await readFile(new URL('../../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
     const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'lite', 'wake_lock', 'fullscreen', 'token', 'device_id', 'sendspin_url'].map(id => [id, {value:'', checked:false, dataset:{}, select(){}}]));
     nodes.get('url').dataset.base = 'http://192.168.10.10:8098';
     const events = new Map();
@@ -692,7 +692,7 @@ test('idle project artwork supplies the same background image as the album artwo
 });
 
 test('URL builder emits a clean kiosk URL and only selected additions', async () => {
-    const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
+    const builder = await readFile(new URL('../../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
     const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'lite', 'wake_lock', 'ma_url', 'token', 'device_id', 'sendspin_url'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
     nodes.get('url').dataset.base = 'http://192.168.10.10:8098';
     let mode = 'sendspin';
@@ -752,7 +752,7 @@ test('fragment token is stored and removed from the visible player URL', async (
 
 
 test('builder puts credentials in the fragment instead of the request query', async () => {
-    const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
+    const builder = await readFile(new URL('../../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
     const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'lite', 'wake_lock', 'ma_url', 'token', 'device_id', 'sendspin_url'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
     nodes.get('url').dataset.base = 'http://192.0.2.10:8098';
     nodes.get('token').value = 'secret & token';
@@ -975,7 +975,7 @@ test('optional group label follows membership and uses plain text', async () => 
 
 
 test('builder and Sendspin navigation retain optional group display', async () => {
-    const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
+    const builder = await readFile(new URL('../../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
     const nodes = new Map(['url','copy','open','controls','party','viz','lyrics','queue','show_player_id','show_group','remote','lite','wake_lock','fullscreen','token','device_id','sendspin_url'].map(id => [id,{value:'',checked:false,dataset:{},select(){}}]));
     nodes.get('url').dataset.base = 'http://192.168.10.10:8098';
     const events = new Map();
