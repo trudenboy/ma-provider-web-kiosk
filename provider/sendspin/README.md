@@ -1,5 +1,11 @@
 # Sendspin browser assets
 
+This directory holds the entry-point source, the build script and the locked npm
+dependencies for the bundle committed in `../static/web/sendspin-js/`. It lives
+inside the provider so the upstream sync ships the source together with the
+generated assets: the bundle can be reviewed and rebuilt from the provider tree
+alone, without the provider-repository scripts.
+
 Node 22 or newer is required only for development and CI. Music Assistant
 serves the committed assets and does not install npm dependencies at runtime.
 
@@ -30,7 +36,9 @@ are replaced by modules that reject with an explicit error if reached. Opus uses
 WebCodecs; browsers without WebCodecs are still offered FLAC/PCM by the kiosk.
 No CDN, unresolved package imports or Node builtins are needed by the browser.
 
-`BUILD.json` records the bundled package versions, esbuild version and JS SHA256.
+`BUILD.json` records the bundled package versions, esbuild version and JS SHA256,
+and names this directory's `index.js` (`source`) and `build.mjs` (`build`), so the
+generated bundle can be traced back to the inputs that produced it.
 Full upstream licenses and package attribution are embedded in the JS header.
 No separate license files are shipped. Generated assets are tracked
 so provider releases and the standard upstream sync need no build-system changes
