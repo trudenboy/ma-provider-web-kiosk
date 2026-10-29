@@ -930,6 +930,28 @@ test("browser reports HTML5 and active Sendspin volume capabilities", async () =
 });
 
 
+test("a Sendspin seek keeps progress and software volume on the stream", async () => {
+    const result = await startKiosk("", [], undefined, {}, { fakeSdk:true });
+    const socket = result.socketInstances[0];
+    const message = data => socket.onmessage({ data: JSON.stringify(data) });
+    message({ type: "welcome", player_id: "wk-seek-clear" });
+    await new Promise(resolve => setImmediate(resolve));
+    const player = result.context.__sendspinPlayer;
+    const tick = () => result.intervals.filter(interval => interval.delay === 500).forEach(interval => interval.callback());
+    message({ type: "volume", level: 42 });
+    player.core.onStreamStart();
+    player.core.trackProgress = { positionMs: 65000, durationMs: 180000, playbackSpeed: 1 };
+    tick();
+    assert.equal(result.elements.get("kiosk-time").textContent, "1:05");
+    assert.equal(result.elements.get("k-volume-level").textContent, "42%");
+    player.core.onStreamClear();
+    player.core.trackProgress = { positionMs: 120000, durationMs: 180000, playbackSpeed: 1 };
+    tick();
+    assert.equal(result.elements.get("kiosk-time").textContent, "2:00");
+    assert.equal(result.elements.get("k-volume-level").textContent, "42%");
+});
+
+
 test("Sendspin identifies the same browser model reported by MA", async () => {
     const result = await startKiosk("", [], undefined, {}, { fakeSdk:true });
     result.socketInstances[0].onmessage({ data:JSON.stringify({ type:"welcome", player_id:"wk-browser",
