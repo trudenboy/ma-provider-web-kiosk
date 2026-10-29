@@ -577,7 +577,7 @@ class WebKioskProvider(PlayerProvider):
         if self._unloading:
             coro.close()
             return None
-        task = self.mass.create_task(coro)
+        task: asyncio.Future[Any] = self.mass.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         return task
