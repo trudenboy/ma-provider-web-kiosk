@@ -77,6 +77,9 @@ is needed only for that build:
 cd provider/sendspin
 npm ci
 npm run check   # generated assets match the lockfile
+
+cd ../../tests/standalone/js
+npm ci
 npm test        # classic-script loading, identity and PCM decoding
 ```
 

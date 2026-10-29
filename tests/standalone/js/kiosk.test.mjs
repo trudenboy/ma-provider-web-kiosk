@@ -4,9 +4,9 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createContext, runInContext } from 'node:vm';
 
-const source = await readFile(new URL('../../provider/static/web/web.js', import.meta.url), 'utf8');
-const sdkSource = await readFile(new URL('../../provider/static/web/sendspin-js/index.js', import.meta.url), 'utf8');
-const html = await readFile(new URL('../../provider/static/web/index.html', import.meta.url), 'utf8');
+const source = await readFile(new URL('../../../provider/static/web/web.js', import.meta.url), 'utf8');
+const sdkSource = await readFile(new URL('../../../provider/static/web/sendspin-js/index.js', import.meta.url), 'utf8');
+const html = await readFile(new URL('../../../provider/static/web/index.html', import.meta.url), 'utf8');
 const elementIds = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]));
 
 test('group Sendspin playback shows SDK metadata without a native kiosk play message', async () => {
@@ -296,7 +296,7 @@ test('a rejected fullscreen request leaves playback controls usable', async () =
 });
 
 test('the URL builder enables the optional fullscreen button without changing default Sendspin', async () => {
-    const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
+    const builder = await readFile(new URL('../../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
     const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'lite', 'wake_lock', 'fullscreen', 'token', 'device_id', 'sendspin_url'].map(id => [id, {value:'', checked:false, dataset:{}, select(){}}]));
     nodes.get('url').dataset.base = 'http://192.168.10.10:8098';
     const events = new Map();
@@ -692,7 +692,7 @@ test('idle project artwork supplies the same background image as the album artwo
 });
 
 test('URL builder emits a clean kiosk URL and only selected additions', async () => {
-    const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
+    const builder = await readFile(new URL('../../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
     const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'lite', 'wake_lock', 'ma_url', 'token', 'device_id', 'sendspin_url'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
     nodes.get('url').dataset.base = 'http://192.168.10.10:8098';
     let mode = 'sendspin';
@@ -752,7 +752,7 @@ test('fragment token is stored and removed from the visible player URL', async (
 
 
 test('builder puts credentials in the fragment instead of the request query', async () => {
-    const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
+    const builder = await readFile(new URL('../../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
     const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'lite', 'wake_lock', 'ma_url', 'token', 'device_id', 'sendspin_url'].map(id => [id, { value: '', checked: false, dataset: {}, select() {} }]));
     nodes.get('url').dataset.base = 'http://192.0.2.10:8098';
     nodes.get('token').value = 'secret & token';
@@ -930,6 +930,28 @@ test("browser reports HTML5 and active Sendspin volume capabilities", async () =
 });
 
 
+test("a Sendspin seek keeps progress and software volume on the stream", async () => {
+    const result = await startKiosk("", [], undefined, {}, { fakeSdk:true });
+    const socket = result.socketInstances[0];
+    const message = data => socket.onmessage({ data: JSON.stringify(data) });
+    message({ type: "welcome", player_id: "wk-seek-clear" });
+    await new Promise(resolve => setImmediate(resolve));
+    const player = result.context.__sendspinPlayer;
+    const tick = () => result.intervals.filter(interval => interval.delay === 500).forEach(interval => interval.callback());
+    message({ type: "volume", level: 42 });
+    player.core.onStreamStart();
+    player.core.trackProgress = { positionMs: 65000, durationMs: 180000, playbackSpeed: 1 };
+    tick();
+    assert.equal(result.elements.get("kiosk-time").textContent, "1:05");
+    assert.equal(result.elements.get("k-volume-level").textContent, "42%");
+    player.core.onStreamClear();
+    player.core.trackProgress = { positionMs: 120000, durationMs: 180000, playbackSpeed: 1 };
+    tick();
+    assert.equal(result.elements.get("kiosk-time").textContent, "2:00");
+    assert.equal(result.elements.get("k-volume-level").textContent, "42%");
+});
+
+
 test("Sendspin identifies the same browser model reported by MA", async () => {
     const result = await startKiosk("", [], undefined, {}, { fakeSdk:true });
     result.socketInstances[0].onmessage({ data:JSON.stringify({ type:"welcome", player_id:"wk-browser",
@@ -975,7 +997,7 @@ test('optional group label follows membership and uses plain text', async () => 
 
 
 test('builder and Sendspin navigation retain optional group display', async () => {
-    const builder = await readFile(new URL('../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
+    const builder = await readFile(new URL('../../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
     const nodes = new Map(['url','copy','open','controls','party','viz','lyrics','queue','show_player_id','show_group','remote','lite','wake_lock','fullscreen','token','device_id','sendspin_url'].map(id => [id,{value:'',checked:false,dataset:{},select(){}}]));
     nodes.get('url').dataset.base = 'http://192.168.10.10:8098';
     const events = new Map();

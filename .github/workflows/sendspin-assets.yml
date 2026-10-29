@@ -17,13 +17,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: provider/sendspin/package-lock.json
-      - name: Install locked dependencies
+          cache-dependency-path: |
+            provider/sendspin/package-lock.json
+            tests/standalone/js/package-lock.json
+      - name: Install locked build dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: provider/sendspin
       - name: Verify generated assets
         run: npm run check
         working-directory: provider/sendspin
+      - name: Install locked test dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: tests/standalone/js
       - name: Verify browser module behavior
         run: npm test
-        working-directory: provider/sendspin
+        working-directory: tests/standalone/js
