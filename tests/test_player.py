@@ -91,6 +91,8 @@ async def test_play_media_reports_song_length_and_stream_start(player: WebKioskP
     server._ws_clients[player.player_id] = {Mock(closed=False)}
     server._post = Mock()  # type: ignore[method-assign]
     player.provider.http_server = server  # type: ignore[attr-defined]
+    player.provider.spawn_wave = Mock()  # type: ignore[method-assign]
+    player.provider.spawn_lyrics = Mock()  # type: ignore[method-assign]
 
     await player.play_media(media)
 
