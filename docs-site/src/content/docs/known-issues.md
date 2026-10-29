@@ -18,7 +18,7 @@ affect; a fixed item is removed rather than kept here as history.
 
 **Workaround:** run the integration build from
 [trudenboy/ma-server](https://github.com/trudenboy/ma-server) on the
-`integration/dev` branch. See [Configuration](configuration.md).
+`integration/dev` branch. See [Configuration](configuration/).
 
 ### The kiosk port is unauthenticated
 
@@ -90,8 +90,9 @@ Firefox 68 capabilities; older engines get the HTML5 fallback at best. A TV shel
 can also intercept remote-control keys before the page sees them.
 
 **Fix:** try `sendspin=0` and `lite=1`, and use the TV's own screen and sleep
-settings when the wake lock API is unavailable. See
-[Browser Compatibility](../browser-compatibility/) for the engine table.
+settings when the wake lock API is unavailable. See the
+[browser compatibility audit](https://github.com/trudenboy/ma-provider-web-kiosk/blob/dev/BROWSER_COMPATIBILITY_AUDIT.md)
+for the engine table.
 
 ### Hardware codecs are not verified
 
