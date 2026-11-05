@@ -52,6 +52,10 @@ def test_guard_detects_a_conversion_without_loading(tmp_path: Path) -> None:
 
 
 ORDER_READ = "items"
+# The read-only display copies the queue for rendering. It never chooses or
+# starts an item, so it is the one place allowed to read the order; the test
+# below also asserts that it contains no playback command.
+DISPLAY_ORDER_READERS = frozenset({"_display_only_queue_snapshot"})
 
 
 def _order_reads(path: Path) -> list[tuple[int, str]]:
@@ -60,6 +64,8 @@ def _order_reads(path: Path) -> list[tuple[int, str]]:
     found: list[tuple[int, str]] = []
     for function in ast.walk(tree):
         if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if function.name in DISPLAY_ORDER_READERS:
             continue
         for node in ast.walk(function):
             if (
@@ -77,6 +83,27 @@ def _order_reads(path: Path) -> list[tuple[int, str]]:
 def test_queue_order_is_left_to_the_queue_controller(path: Path) -> None:
     """The flow stream decides what plays next; the kiosk never walks the queue itself."""
     assert _order_reads(path) == []
+
+
+def test_display_queue_reader_never_starts_playback() -> None:
+    """The display snapshot may copy the order, but only for rendering."""
+    path = PROVIDER_DIR / "http_server.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    readers = [
+        function
+        for function in ast.walk(tree)
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and function.name in DISPLAY_ORDER_READERS
+    ]
+    assert readers, "display queue reader is missing"
+    playback = {"play_media", "play_index", "resume", "cmd_play", "cmd_seek", "play"}
+    for function in readers:
+        calls = {
+            node.func.attr
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        assert calls.isdisjoint(playback)
 
 
 def test_guard_detects_an_order_read(tmp_path: Path) -> None:

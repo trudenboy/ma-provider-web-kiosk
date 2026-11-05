@@ -28,6 +28,9 @@ the kiosk shows the current track and plays its audio.
 
 The clean URL selects **Sendspin**, with all optional additions off. To use
 ordinary HTML5 streaming, open `http://<ma-host>:8098/kiosk?sendspin=0`.
+For a screen that should only show a player (a TV, wall panel or HA dashboard),
+enable **Enable read-only display screens** and open
+`http://<ma-host>:8098/view?player=<id>` or `.../view?party=1`.
 Keep the page open and the device awake during playback. A reload needs another
 user gesture to allow sound. The browser keeps its identity in local storage;
 closing its last connection removes the player after a five-second grace period.
@@ -41,6 +44,15 @@ closing its last connection removes the player after a five-second grace period.
   for narrow screens.
 - Optional visualizer from stored audio analysis, lyrics, Party QR,
   queue display, and an extra selectable Player ID badge.
+- Read-only display mode (`/view`) for TVs, wall panels and dashboards: shows
+  an existing Music Assistant player without registering a new player and
+  without an MA token.
+- The queue is pushed over the kiosk WebSocket when display mode is enabled, so
+  a display page does not poll the Music Assistant API.
+- URL profiles (`profile=tv|wall|guest`), a fullscreen lock, and a web app
+  manifest for kiosk provisioning.
+- Optional iframe embedding of display pages for a Home Assistant dashboard,
+  restricted to exact configured origins.
 - Click the Party QR to show it in place of the large artwork; click again or
   press Escape to restore the artwork.
 - On wide screens, lyrics appear to the right of the artwork and follow the
@@ -50,10 +62,11 @@ closing its last connection removes the player after a five-second grace period.
 - Experimental Sendspin grouping, with HTML5 fallback when Sendspin cannot connect.
 - An interactive URL builder and a copyable base URL in provider settings.
 
-Track metadata, the visualizer and lyrics do not need an MA API token. The
-Party QR needs the provider setting `enable_party_qr` (off by default) but no
-token. On-page playback controls and the queue display require a token. Music
-selection and library browsing remain in the Music Assistant interface.
+Track metadata, the visualizer, lyrics and the display-mode queue do not need
+an MA API token. The Party QR needs the provider setting `enable_party_qr` (off
+by default) but no token. On-page playback controls, and the queue on a player
+page unless display mode is enabled, require a token. Music selection and
+library browsing remain in the Music Assistant interface.
 
 ## URL builder and parameters
 
@@ -64,11 +77,16 @@ read-only **Kiosk URL** setting also contains the base player URL.
 | Parameter | Default | Effect |
 |-----------|---------|--------|
 | `sendspin` | enabled | Set `sendspin=0` for HTML5 playback |
+| `display` | off | `display=1` opens the read-only display view; `/view` is the canonical URL |
+| `player` | unset | Player to show in display mode (any MA player) |
+| `party` | off | `party=1` shows the QR while a Party is active; on `/view` it follows the Party player |
+| `profile` | unset | `tv`, `wall` or `guest`: presets for remote, lite, wake lock, fullscreen, queue and lyrics |
+| `lock` | off | `lock=1` hides the exit control and enters fullscreen on the first gesture |
+| `lyrics=full` | off | Full-screen karaoke-style lyrics instead of the compact block |
 | `controls` | off | `controls=1` enables playback controls |
-| `party` | off | `party=1` shows the QR while a Party is active |
 | `viz` | off | `viz=1` enables the audio-analysis visualizer |
 | `lyrics` | off | `lyrics=1` enables lyric lines when available |
-| `queue` | off | `queue=1` enables the queue display; requires a token |
+| `queue` | off | `queue=1` enables the queue display; a display page gets it without a token |
 | `show_player_id` | off | `show_player_id=1` adds a selectable ID badge |
 | `show_group` | off | `show_group=1` shows the current MA group name; hidden for standalone players |
 | `remote` | off | `remote=1` enables arrow/Enter/Back navigation for TV remotes |
@@ -117,6 +135,8 @@ not grant the player page access to playback controls: supply its token separate
 | `show_stop_notification` | `false` | Show an informational notice after playback stops |
 | `enable_sendspin_bridge` | `true` | Enable experimental Sendspin integration |
 | `enable_party_qr` | `false` | Show the Party join QR. The QR contains a guest login; enable it only when the kiosk port is limited to a trusted network |
+| `enable_display_mode` | `false` | Allow read-only `/view` screens. A display can show any player's item and queue without a token; enable it only on a trusted network |
+| `frame_ancestors` | empty | Comma-separated exact origins allowed to embed `/view` (for example `https://homeassistant.local:8123`). Empty keeps iframe embedding disabled |
 | `url_builder_require_auth` | `false` | Require MA sign-in for the builder and player list |
 | `kiosk_url` | read-only | Copyable canonical `/kiosk` URL |
 
@@ -127,10 +147,25 @@ The kiosk port has no login: anyone who can reach it can open `/kiosk` and
 register a browser player. Keep it on the local network, do not publish it to the
 internet, and treat a kiosk URL that carries an MA token as a credential.
 
+Display mode is opt-in. While it is enabled, anyone who can reach the kiosk port
+can view any registered player's current item and queue through `/view`, without
+a Music Assistant token. This is the point of the mode for a trusted LAN, but it
+is also why the setting is off by default. Use `party=1` on `/view` to follow the
+Party plugin's player, or `player=<id>` to show a specific speaker, Sendspin
+output or kiosk.
+
+Iframe embedding is disabled by default. `frame_ancestors` allows only exact
+HTTP(S) origins and only for `/view` (and the `/kiosk?display=1` alias); the URL
+builder, the login page and player pages with controls remain `DENY`. Do not add
+wildcards or a public origin, and remember that an embedded page can still be
+click-jacked by a compromised parent origin.
+
 ## Browser requirements and troubleshooting
 
-Open Kiosk and the URL builder as standalone pages. Their security headers block
-iframe embedding, including embedding in Home Assistant dashboards.
+Open Kiosk and the URL builder as standalone pages. Player pages and the builder
+block iframe embedding. A display page can be embedded in a Home Assistant
+dashboard only after its origin is listed in `frame_ancestors`; see the security
+notes above.
 
 - Use a browser with JavaScript, WebSocket, local storage, and audio playback
   support. Compatibility varies across TV browsers. Keep the device awake and
