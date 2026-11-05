@@ -50,6 +50,15 @@ async def test_get_config_entries_exposes_expected_keys(provider: WebKioskProvid
     }
 
 
+def test_manifest_declares_a_community_tier() -> None:
+    """Upstream requires every public provider manifest to declare its maintainer tier."""
+    manifest = json.loads(
+        (Path(provider_package.__file__).parent / "manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert manifest["tier"] == "community"
+
+
 async def test_party_qr_is_an_opt_in(provider: WebKioskProvider) -> None:
     """A guest login QR is not exposed on the unauthenticated kiosk port by default."""
     entries = {entry.key: entry for entry in await provider.get_config_entries()}
