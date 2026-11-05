@@ -2,7 +2,7 @@
 id: "0010"
 title: "View-only display screens, pushed queue and embeddable kiosk"
 size: L
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 720
 feature_id:
