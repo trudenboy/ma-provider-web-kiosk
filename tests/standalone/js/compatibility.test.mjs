@@ -6,7 +6,7 @@ import test from 'node:test';
 const require = createRequire(new URL('./package.json', import.meta.url));
 const { parse } = require('acorn');
 
-for (const file of ['web.js', 'url-builder.js', 'index.html', 'builder-login.html']) {
+for (const file of ['web.js', 'display.js', 'url-builder.js', 'index.html', 'view.html', 'builder-login.html']) {
     test(`${file} uses classic ES2015 syntax for the HTML5 profile`, async () => {
         const source = await readFile(new URL(`../../../provider/static/web/${file}`, import.meta.url), 'utf8');
         const scripts = file.endsWith('.html')

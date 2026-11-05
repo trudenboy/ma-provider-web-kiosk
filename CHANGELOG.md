@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-05
+
+### Added
+
+- Read-only display screens at `/view`: show any Music Assistant player's artwork, progress, lyrics, queue and Party QR without registering a new player or needing a Music Assistant token. Use `player=<id>` or `party=1`.
+- Queue updates in display mode are pushed over the kiosk connection, including guest and boost badges, instead of polling the Music Assistant API.
+- URL profiles `tv`, `wall` and `guest`, a fullscreen lock, and a web app manifest for kiosk provisioning.
+- Optional iframe embedding for display pages in a Home Assistant dashboard, limited to exact origins in `frame_ancestors`.
+
+### Changed
+
+- The queue display on a player page now uses the pushed snapshot when display mode is enabled; a token is still required when it is off.
+
+### Security
+
+- Display mode is off by default. Iframe embedding stays disabled by default and only display pages can be framed; the builder, login page and player pages keep `X-Frame-Options: DENY`.
+
 ## [1.1.3] - 2026-10-29
 
 ### Fixed

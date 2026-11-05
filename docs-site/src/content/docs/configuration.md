@@ -26,6 +26,8 @@ Once the provider ships with Music Assistant:
 | `show_stop_notification` | `false` | Show an informational notice after playback stops |
 | `enable_sendspin_bridge` | `true` | Enable experimental Sendspin integration |
 | `enable_party_qr` | `false` | Show the Party join QR. The QR contains a guest login; enable it only when the kiosk port is limited to a trusted network |
+| `enable_display_mode` | `false` | Allow read-only `/view` screens without an MA token or a new player; trusted network only |
+| `frame_ancestors` | empty | Comma-separated exact origins allowed to embed `/view`, for example `https://homeassistant.local:8123` |
 | `url_builder_require_auth` | `false` | Require MA sign-in for the builder and player list |
 | `kiosk_url` | read-only | Copyable canonical `/kiosk` URL |
 
@@ -39,7 +41,10 @@ a browser player, receive a stream token and control playback when a page is
 given an MA token. Keep the port on the local network, do not publish it to the
 internet, and treat a copied kiosk URL that carries a token as a credential.
 `Require MA sign-in for URL builder` protects only the builder and player list,
-not `/kiosk`.
+not `/kiosk`. Display mode is off by default; when enabled, `/view` can show any
+player's item and queue without a token. Iframe embedding is disabled unless the
+parent origin is listed in `frame_ancestors`, and only display pages may be
+framed.
 
 ## URL builder and parameters
 
@@ -50,11 +55,16 @@ read-only **Kiosk URL** setting also contains the base player URL.
 | Parameter | Default | Effect |
 |-----------|---------|--------|
 | `sendspin` | enabled | Set `sendspin=0` for HTML5 playback |
+| `display` | off | `/view` or `display=1` opens the read-only display |
+| `player` | unset | Player to show in display mode |
+| `party` | off | `party=1` shows the QR; on `/view` it follows the Party player |
+| `profile` | unset | `tv`, `wall` or `guest` presets |
+| `lock` | off | Hide the exit control and enter fullscreen on the first gesture |
+| `lyrics=full` | off | Full-screen karaoke lyrics |
 | `controls` | off | `controls=1` enables playback controls |
-| `party` | off | `party=1` shows the QR while a Party is active and `enable_party_qr` is set |
 | `viz` | off | `viz=1` enables the audio-analysis visualizer |
 | `lyrics` | off | `lyrics=1` enables lyric lines when available |
-| `queue` | off | `queue=1` enables the queue display; requires a token |
+| `queue` | off | `queue=1` enables the queue display; a display page gets it without a token |
 | `show_player_id` | off | `show_player_id=1` adds a selectable ID badge |
 | `show_group` | off | `show_group=1` shows the current MA group name; hidden for standalone players |
 | `remote` | off | `remote=1` enables arrow/Enter/Back navigation for TV remotes |
@@ -77,7 +87,13 @@ http://192.168.10.10:8098/kiosk
 http://192.168.10.10:8098/kiosk?sendspin=0
 http://192.168.10.10:8098/kiosk?controls=1&queue=1#token=<ma-access-token>
 http://192.168.10.10:8098/kiosk?party=1&viz=1&lyrics=1&show_player_id=1
+http://192.168.10.10:8098/view?party=1&profile=tv&queue=1&lyrics=1
+http://192.168.10.10:8098/view?player=wk_tv&profile=wall&lock=1
 ```
+
+Display mode must be enabled in the provider settings first. `/view?party=1`
+resolves the Party player; `/view?player=<id>` follows any registered player,
+including a speaker or a Sendspin output.
 
 Use a different `device_id` for each simultaneous player. Clearing browser
 storage or changing the browser profile creates a new identity. The builder puts tokens

@@ -11,8 +11,10 @@ from music_assistant_models.enums import ProviderFeature
 import music_assistant.providers.web_kiosk as provider_package
 from music_assistant.providers.web_kiosk import setup
 from music_assistant.providers.web_kiosk.constants import (
+    CONF_ENABLE_DISPLAY_MODE,
     CONF_ENABLE_PARTY_QR,
     CONF_ENABLE_SENDSPIN_BRIDGE,
+    CONF_FRAME_ANCESTORS,
     CONF_HTTP_PORT,
     CONF_KIOSK_URL,
     CONF_SHOW_STOP_NOTIFICATION,
@@ -41,6 +43,8 @@ async def test_get_config_entries_exposes_expected_keys(provider: WebKioskProvid
         CONF_SHOW_STOP_NOTIFICATION,
         CONF_ENABLE_SENDSPIN_BRIDGE,
         CONF_ENABLE_PARTY_QR,
+        CONF_ENABLE_DISPLAY_MODE,
+        CONF_FRAME_ANCESTORS,
         CONF_KIOSK_URL,
         CONF_URL_BUILDER_REQUIRE_AUTH,
     }

@@ -297,7 +297,7 @@ test('a rejected fullscreen request leaves playback controls usable', async () =
 
 test('the URL builder enables the optional fullscreen button without changing default Sendspin', async () => {
     const builder = await readFile(new URL('../../../provider/static/web/url-builder.js', import.meta.url), 'utf8');
-    const nodes = new Map(['url', 'copy', 'open', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'lite', 'wake_lock', 'fullscreen', 'token', 'device_id', 'sendspin_url'].map(id => [id, {value:'', checked:false, dataset:{}, select(){}}]));
+    const nodes = new Map(['url', 'copy', 'open', 'display', 'controls', 'party', 'viz', 'lyrics', 'queue', 'show_player_id', 'remote', 'lite', 'wake_lock', 'fullscreen', 'lock', 'profile', 'display_player', 'token', 'device_id', 'sendspin_url'].map(id => [id, {value:'', checked:false, dataset:{}, select(){}}]));
     nodes.get('url').dataset.base = 'http://192.168.10.10:8098';
     const events = new Map();
     runInContext(builder, createContext({
@@ -308,6 +308,37 @@ test('the URL builder enables the optional fullscreen button without changing de
     nodes.get('fullscreen').checked = true;
     events.get('change')();
     assert.equal(nodes.get('url').value, 'http://192.168.10.10:8098/kiosk?fullscreen=1');
+    nodes.get('display').checked = true;
+    events.get('change')();
+    assert.equal(nodes.get('url').value, 'http://192.168.10.10:8098/view?display=1&party=1&fullscreen=1');
+    nodes.get('display_player').value = 'wk_tv';
+    events.get('input')();
+    assert.match(nodes.get('url').value, /[?&]player=wk_tv/);
+    assert.doesNotMatch(nodes.get('url').value, /party=1/);
+    nodes.get('display').checked = false;
+    nodes.get('profile').value = 'tv';
+    events.get('change')();
+    assert.equal(nodes.get('url').value, 'http://192.168.10.10:8098/kiosk?profile=tv&fullscreen=1');
+});
+
+test('profile presets expand without overriding explicit flags', async () => {
+    const result = await startKiosk('?sendspin=0&profile=tv', [], undefined, {}, { fullscreen: 'standard' });
+    assert.equal(result.root.classList.contains('lite'), true);
+    assert.equal(result.elements.get('k-fullscreen').classList.contains('hidden'), false);
+
+    const overridden = await startKiosk('?sendspin=0&profile=tv&lyrics=0', [], undefined, {}, { fullscreen: 'standard' });
+    assert.equal(overridden.root.classList.contains('lite'), true);
+});
+
+test('lock hides the exit control and enters fullscreen on the first gesture', async () => {
+    const result = await startKiosk('?sendspin=0&fullscreen=1&lock=1', [], undefined, {}, { fullscreen: 'standard' });
+    const button = result.elements.get('k-fullscreen');
+    assert.equal(button.classList.contains('hidden'), true);
+    const handlers = result.documentEvents.get('pointerdown') || [];
+    assert.ok(handlers.length > 0);
+    handlers.forEach(callback => callback());
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(result.fullscreenCalls.includes('enter'), true);
 });
 
 test('Sendspin transport navigation preserves the fullscreen option', async () => {
